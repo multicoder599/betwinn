@@ -14,20 +14,33 @@
    const jwt = require('jsonwebtoken');
    
    const app = express();
-   const PORT = process.env.PORT || 3000;
+   
+   // CRITICAL FOR PRODUCTION: Tells Express it is behind a reverse proxy (Nginx). 
+   // This ensures rate limiting uses the actual client IP, not the proxy's IP.
+   app.set('trust proxy', 1);
+   
+   const PORT = process.env.PORT || 3012; // Adjusted to match your terminal output
    const JWT_SECRET = process.env.JWT_SECRET || 'betwinn_secret_key_2026';
    const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/betwinn';
+   const API_URL = process.env.NODE_ENV === 'production' ? 'https://api.betwinn.co.ke/api' : `http://localhost:${PORT}/api`;
    
    /* =========================================================
       MIDDLEWARE
       ========================================================= */
    app.use(helmet());
+   
+   // CORS: Define the FRONTEND domains that are allowed to talk to this API.
    app.use(cors({
-    origin: ['https://betwinn.co.ke', 'https://www.betwinn.co.ke'],
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    credentials: true
-}));
-
+       origin: [
+           'https://betwinn.co.ke', 
+           'https://www.betwinn.co.ke',
+           'http://localhost:3012', // Keep for local frontend testing
+           'http://127.0.0.1:3012'
+       ],
+       methods: ['GET', 'POST', 'PUT', 'DELETE'],
+       credentials: true
+   }));
+   
    app.use(express.json({ limit: '10mb' }));
    app.use(mongoSanitize());
    
@@ -459,7 +472,7 @@
            seedMatches();
            app.listen(PORT, () => {
                console.log(`BetWinn API running on port ${PORT}`);
-               console.log(`API Base: http://localhost:${PORT}/api`);
+               console.log(`API Base: ${API_URL}`);
            });
        })
        .catch(err => {
