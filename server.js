@@ -986,7 +986,13 @@ async function getOddsApiActiveSports() {
             timeout: 10000
         });
         if (r.data && Array.isArray(r.data)) {
-            return r.data.filter(s => s.active && !s.key.includes('_outrights')).map(s => s.key);
+            return r.data.filter(s => 
+                s.active && 
+                !s.key.includes('_outrights') && 
+                !s.key.includes('_winner') &&
+                !s.key.includes('_specials') &&
+                !s.key.includes('_preseason')
+            ).map(s => s.key);
         }
     } catch (e) {
         console.error('Failed to fetch sports list:', e.message);
