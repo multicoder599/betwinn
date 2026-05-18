@@ -96,62 +96,69 @@
    };
    
    function getCountryCodeFromSportKey(sportKey) {
-    if (!sportKey) return 'gb';
-    const map = {
-        'soccer_epl': 'gb',           // changed from 'gb-eng'
-        'soccer_spain': 'es',
-        'soccer_italy': 'it',
-        'soccer_germany': '#de',
-        'soccer_france': 'fr',
-        'soccer_uefa': 'eu',          // flagcdn handles 'eu' beautifully
-        'soccer_netherlands': 'nl',
-        'soccer_portugal': 'pt',
-        'soccer_belgium': 'be',
-        'soccer_turkey': 'tr',
-        'soccer_usa': 'us',
-        'soccer_canada': 'ca',
-        'soccer_australia': 'au',
-        'soccer_kenya': 'ke',
-        'soccer_tanzania': 'tz',
-        'soccer_uganda': 'ug',
-        'basketball_nba': 'us',
-        'tennis_atp': 'gb',
-        'tennis_wta': 'gb',
-        'mma_ufc': 'us'
-    };
-    for (const [prefix, code] of Object.entries(map)) {
-        if (sportKey.toLowerCase().startsWith(prefix)) return code;
-    }
-    return 'gb'; // fallback code string
-}
-
-function getTeamFlagUrl(teamName, countryCode) {
-    // Use country flag as base, with team initials overlay concept via ui-avatars for team-specific look
-    const cc = countryCode || 'gb-eng';
-    const encoded = encodeURIComponent(teamName || 'Team');
-    return {
-        flag: `https://flagcdn.com/w40/${cc}.png`,
-        logo: `https://ui-avatars.com/api/?name=${encoded}&background=2563eb&color=fff&size=128&bold=true&font-size=0.4`,
-        svg: `https://flagcdn.com/${cc}.svg`
-    };
-}
-
-function enrichMatchWithFlags(matchObj) {
-    const cc = matchObj.country || getCountryCodeFromSportKey(matchObj.sport_key || matchObj.sport || 'soccer');
-    const home = matchObj.homeTeam || matchObj.home || 'Home';
-    const away = matchObj.awayTeam || matchObj.away || 'Away';
-    const homeFlags = getTeamFlagUrl(home, cc);
-    const awayFlags = getTeamFlagUrl(away, cc);
-    matchObj.homeFlag = homeFlags.flag;
-    matchObj.awayFlag = awayFlags.flag;
-    matchObj.homeLogo = homeFlags.logo;
-    matchObj.awayLogo = awayFlags.logo;
-    matchObj.leagueFlag = `https://flagcdn.com/w40/${cc}.png`;
-    matchObj.country = cc;
-    return matchObj;
-}
-
-function getMatchTimeStr(startTimeStr) {
+       if (!sportKey) return 'gb';
+       const map = {
+           'soccer_epl': 'gb',
+           'soccer_spain': 'es',
+           'soccer_italy': 'it',
+           'soccer_germany': 'de',
+           'soccer_france': 'fr',
+           'soccer_uefa': 'eu', 
+           'soccer_netherlands': 'nl',
+           'soccer_portugal': 'pt',
+           'soccer_belgium': 'be',
+           'soccer_turkey': 'tr',
+           'soccer_usa': 'us',
+           'soccer_canada': 'ca',
+           'soccer_australia': 'au',
+           'soccer_kenya': 'ke',
+           'soccer_tanzania': 'tz',
+           'soccer_uganda': 'ug',
+           'basketball_nba': 'us',
+           'tennis_atp': 'gb',
+           'tennis_wta': 'gb',
+           'mma_ufc': 'us'
+       };
+       for (const [prefix, code] of Object.entries(map)) {
+           if (sportKey.toLowerCase().startsWith(prefix)) return code;
+       }
+       return 'gb';
+   }
+   
+   function getTeamFlagUrl(teamName, countryCode) {
+       const cc = countryCode || 'gb';
+       const encoded = encodeURIComponent(teamName || 'Team');
+       return {
+           flag: `https://flagcdn.com/w40/${cc}.png`,
+           logo: `https://ui-avatars.com/api/?name=${encoded}&background=2563eb&color=fff&size=128&bold=true&font-size=0.4`,
+           svg: `https://flagcdn.com/${cc}.svg`
+       };
+   }
+   
+   function enrichMatchWithFlags(matchObj) {
+       let cc = matchObj.country || getCountryCodeFromSportKey(matchObj.sport_key || matchObj.sport || 'soccer');
+       
+       // SAFETY CHECK: If the database accidentally saved an emoji (like 🏆), replace it with 'gb' to prevent 404 image errors
+       if (/[^\x00-\x7F]/.test(cc) || cc.length > 3) {
+           cc = 'gb';
+       }
+   
+       const home = matchObj.homeTeam || matchObj.home || 'Home';
+       const away = matchObj.awayTeam || matchObj.away || 'Away';
+       const homeFlags = getTeamFlagUrl(home, cc);
+       const awayFlags = getTeamFlagUrl(away, cc);
+       
+       matchObj.homeFlag = homeFlags.flag;
+       matchObj.awayFlag = awayFlags.flag;
+       matchObj.homeLogo = homeFlags.logo;
+       matchObj.awayLogo = awayFlags.logo;
+       matchObj.leagueFlag = `https://flagcdn.com/w40/${cc}.png`;
+       matchObj.country = cc;
+       
+       return matchObj;
+   }
+   
+   function getMatchTimeStr(startTimeStr) {
        if (!startTimeStr) return "";
        const elapsedMs = new Date().getTime() - new Date(startTimeStr).getTime();
        const elapsedMins = Math.floor(elapsedMs / 60000);
@@ -206,7 +213,7 @@ function getMatchTimeStr(startTimeStr) {
        apiId: { type: String, unique: true, sparse: true },
        sport: { type: String, default: 'soccer' },
        league: { type: String, required: true },
-       country: { type: String, default: 'gb-eng' },
+       country: { type: String, default: 'gb' },
        homeTeam: { type: String, required: true },
        awayTeam: { type: String, required: true },
        startTime: { type: Date, required: true },
@@ -392,98 +399,6 @@ function getMatchTimeStr(startTimeStr) {
       SPORTS, COMPETITIONS & MATCHES
       ========================================================= */
    app.get('/api/sports', async (req, res) => {
-       try {
-           const response = await axios.get('https://api.the-odds-api.com/v4/sports/', { params: { apiKey: ODDS_API_KEY }, timeout: 8000 });
-           if (response.data && Array.isArray(response.data)) {
-               const iconMap = {
-                   soccer: 'fa-futbol', basketball: 'fa-basketball', tennis: 'fa-table-tennis-paddle-ball',
-                   mma: 'fa-hand-fist', cricket: 'fa-baseball-bat-ball', rugby: 'fa-football',
-                   baseball: 'fa-baseball', icehockey: 'fa-hockey-puck', volleyball: 'fa-volleyball',
-                   esports: 'fa-gamepad', americanfootball: 'fa-football', golf: 'fa-golf-ball-tee',
-                   boxing: 'fa-hand-fist', motorsports: 'fa-flag-checkered', cycling: 'fa-bicycle',
-                   darts: 'fa-bullseye', snooker: 'fa-circle', handball: 'fa-hand-spock',
-                   waterpolo: 'fa-water', futsal: 'fa-futbol', aussierules: 'fa-football',
-                   floorball: 'fa-hockey-puck', bandy: 'fa-hockey-puck', biathlon: 'fa-person-skiing',
-                   skiing: 'fa-person-skiing', formula1: 'fa-flag-checkered', nascar: 'fa-flag-checkered',
-                   rugbyunion: 'fa-football', rugbyleague: 'fa-football', fieldhockey: 'fa-hockey-puck',
-                   lacrosse: 'fa-baseball', softball: 'fa-baseball', netball: 'fa-volleyball',
-                   pesapallo: 'fa-baseball-bat-ball', surfing: 'fa-water', sailing: 'fa-sailboat',
-                   rowing: 'fa-water', canoeing: 'fa-water', triathlon: 'fa-person-swimming',
-                   tabletennis: 'fa-table-tennis-paddle-ball', badminton: 'fa-feather', squash: 'fa-circle',
-                   racquetball: 'fa-circle', polo: 'fa-horse', chess: 'fa-chess-knight',
-                   archery: 'fa-bullseye', shooting: 'fa-crosshairs', weightlifting: 'fa-dumbbell',
-                   gymnastics: 'fa-person-falling', athletics: 'fa-person-running', swimming: 'fa-person-swimming',
-                   diving: 'fa-water', equestrian: 'fa-horse', fencing: 'fa-khanda', judo: 'fa-hand-fist',
-                   taekwondo: 'fa-hand-fist', karate: 'fa-hand-fist', wrestling: 'fa-hand-fist',
-                   kickboxing: 'fa-hand-fist', muaythai: 'fa-hand-fist', sumo: 'fa-hand-fist',
-                   brazilianjiujitsu: 'fa-hand-fist', parkour: 'fa-person-running', climbing: 'fa-mountain',
-                   skateboarding: 'fa-person-skating', snowboarding: 'fa-person-skiing', curling: 'fa-circle',
-                   bobsleigh: 'fa-sleigh', luge: 'fa-sleigh', skeleton: 'fa-skull', skijumping: 'fa-person-skiing',
-                   alpine: 'fa-person-skiing', crosscountry: 'fa-person-skiing', freestyle: 'fa-person-skiing',
-                   nordiccombined: 'fa-person-skiing', shorttrack: 'fa-person-skating', speedskating: 'fa-person-skating',
-                   figure: 'fa-person-skating', synchronizedswimming: 'fa-person-swimming', marathon: 'fa-person-running',
-                   race: 'fa-flag-checkered', horseracing: 'fa-horse', dogracing: 'fa-dog', camelracing: 'fa-hippo',
-                   greyhound: 'fa-dog', harness: 'fa-horse', trotting: 'fa-horse', endurance: 'fa-horse',
-                   rally: 'fa-car', motogp: 'fa-motorcycle', superbike: 'fa-motorcycle', motocross: 'fa-motorcycle',
-                   atv: 'fa-truck-monster', truck: 'fa-truck', tractor: 'fa-tractor', drifter: 'fa-car',
-                   drag: 'fa-car', karting: 'fa-car', speedway: 'fa-motorcycle', grasstrack: 'fa-motorcycle',
-                   ice_racing: 'fa-car', snowmobile: 'fa-sleigh', jetboat: 'fa-ship', powerboat: 'fa-ship',
-                   yachting: 'fa-sailboat', windsurfing: 'fa-water', kitesurfing: 'fa-wind', wakeboarding: 'fa-water',
-                   waterskiing: 'fa-water', paddleboarding: 'fa-water', kayaking: 'fa-water', rafting: 'fa-water',
-                   fishing: 'fa-fish', hunting: 'fa-paw', shooting_sports: 'fa-crosshairs', billiards: 'fa-circle',
-                   pool: 'fa-circle', carrom: 'fa-circle', bocce: 'fa-circle', petanque: 'fa-circle',
-                   boules: 'fa-circle', croquet: 'fa-circle', shuffleboard: 'fa-circle', horseshoes: 'fa-circle',
-                   discgolf: 'fa-circle', ultimate: 'fa-flying-disc', kabaddi: 'fa-hand-fist', sepaktakraw: 'fa-futbol',
-                   wushu: 'fa-hand-fist', sambo: 'fa-hand-fist', pankration: 'fa-hand-fist', bareknuckle: 'fa-hand-fist',
-                   lethwei: 'fa-hand-fist'
-               };
-               const colorMap = {
-                   soccer: '#3b82f6', basketball: '#f97316', tennis: '#22c55e', mma: '#6b7280', cricket: '#ef4444',
-                   rugby: '#8b5cf6', baseball: '#eab308', icehockey: '#06b6d4', volleyball: '#ec4899', esports: '#a855f7',
-                   americanfootball: '#f97316', golf: '#22c55e', boxing: '#ef4444', motorsports: '#f97316', cycling: '#22c55e',
-                   darts: '#ef4444', snooker: '#22c55e', handball: '#f97316', waterpolo: '#06b6d4', futsal: '#3b82f6',
-                   aussierules: '#eab308', floorball: '#06b6d4', bandy: '#06b6d4', biathlon: '#22c55e', skiing: '#22c55e',
-                   formula1: '#ef4444', nascar: '#ef4444', rugbyunion: '#8b5cf6', rugbyleague: '#8b5cf6', fieldhockey: '#06b6d4',
-                   lacrosse: '#eab308', softball: '#eab308', netball: '#ec4899', pesapallo: '#ef4444', surfing: '#06b6d4',
-                   sailing: '#06b6d4', rowing: '#06b6d4', canoeing: '#06b6d4', triathlon: '#22c55e', tabletennis: '#22c55e',
-                   badminton: '#22c55e', squash: '#22c55e', racquetball: '#22c55e', polo: '#eab308', chess: '#a855f7',
-                   archery: '#ef4444', shooting: '#ef4444', weightlifting: '#6b7280', gymnastics: '#ec4899', athletics: '#f97316',
-                   swimming: '#06b6d4', diving: '#06b6d4', equestrian: '#eab308', fencing: '#a855f7', judo: '#6b7280',
-                   taekwondo: '#6b7280', karate: '#6b7280', wrestling: '#6b7280', kickboxing: '#ef4444', muaythai: '#ef4444',
-                   sumo: '#6b7280', brazilianjiujitsu: '#6b7280', parkour: '#f97316', climbing: '#22c55e', skateboarding: '#ec4899',
-                   snowboarding: '#22c55e', curling: '#06b6d4', bobsleigh: '#06b6d4', luge: '#06b6d4', skeleton: '#a855f7',
-                   skijumping: '#22c55e', alpine: '#22c55e', crosscountry: '#22c55e', freestyle: '#22c55e', nordiccombined: '#22c55e',
-                   shorttrack: '#06b6d4', speedskating: '#06b6d4', figure: '#ec4899', synchronizedswimming: '#06b6d4', marathon: '#f97316',
-                   race: '#ef4444', horseracing: '#eab308', dogracing: '#a855f7', camelracing: '#eab308', greyhound: '#a855f7',
-                   harness: '#eab308', trotting: '#eab308', endurance: '#eab308', rally: '#ef4444', motogp: '#ef4444',
-                   superbike: '#ef4444', motocross: '#ef4444', atv: '#f97316', truck: '#f97316', tractor: '#f97316',
-                   drifter: '#ef4444', drag: '#ef4444', karting: '#ef4444', speedway: '#ef4444', grasstrack: '#ef4444',
-                   ice_racing: '#06b6d4', snowmobile: '#06b6d4', jetboat: '#06b6d4', powerboat: '#06b6d4', yachting: '#06b6d4',
-                   windsurfing: '#06b6d4', kitesurfing: '#06b6d4', wakeboarding: '#06b6d4', waterskiing: '#06b6d4',
-                   paddleboarding: '#06b6d4', kayaking: '#06b6d4', rafting: '#06b6d4', fishing: '#22c55e', hunting: '#22c55e',
-                   shooting_sports: '#ef4444', billiards: '#22c55e', pool: '#22c55e', carrom: '#22c55e', bocce: '#22c55e',
-                   petanque: '#22c55e', boules: '#22c55e', croquet: '#22c55e', shuffleboard: '#22c55e', horseshoes: '#22c55e',
-                   discgolf: '#22c55e', ultimate: '#22c55e', kabaddi: '#ef4444', sepaktakraw: '#3b82f6', wushu: '#ef4444',
-                   sambo: '#ef4444', pankration: '#ef4444', bareknuckle: '#ef4444', lethwei: '#ef4444'
-               };
-               const mapped = response.data.filter(s => s.active).map(s => {
-                   const key = s.key || 'unknown';
-                   const baseKey = key.split('_')[0];
-                   return {
-                       id: baseKey,
-                       name: s.title || s.group || key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
-                       icon: iconMap[baseKey] || 'fa-trophy',
-                       color: colorMap[baseKey] || '#2563eb',
-                       key: key,
-                       group: s.group || 'Other',
-                       hasOutrights: s.has_outrights || false
-                   };
-               });
-               const seen = new Set();
-               const deduped = mapped.filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; });
-               return res.json({ success: true, sports: deduped.slice(0, 60), source: 'the-odds-api', total: deduped.length });
-           }
-       } catch (e) {}
        const sports = [
            { id: 'soccer', name: 'Football', icon: 'fa-futbol', color: '#3b82f6' },
            { id: 'basketball', name: 'Basketball', icon: 'fa-basketball', color: '#f97316' },
@@ -496,54 +411,14 @@ function getMatchTimeStr(startTimeStr) {
            { id: 'volleyball', name: 'Volleyball', icon: 'fa-volleyball', color: '#ec4899' },
            { id: 'esports', name: 'Esports', icon: 'fa-gamepad', color: '#a855f7' },
            { id: 'americanfootball', name: 'American Football', icon: 'fa-football', color: '#f97316' },
-           { id: 'golf', name: 'Golf', icon: 'fa-golf-ball-tee', color: '#22c55e' },
-           { id: 'boxing', name: 'Boxing', icon: 'fa-hand-fist', color: '#ef4444' },
-           { id: 'motorsports', name: 'Motorsports', icon: 'fa-flag-checkered', color: '#f97316' },
-           { id: 'cycling', name: 'Cycling', icon: 'fa-bicycle', color: '#22c55e' },
-           { id: 'darts', name: 'Darts', icon: 'fa-bullseye', color: '#ef4444' },
-           { id: 'snooker', name: 'Snooker', icon: 'fa-circle', color: '#22c55e' },
-           { id: 'handball', name: 'Handball', icon: 'fa-hand-spock', color: '#f97316' },
-           { id: 'waterpolo', name: 'Water Polo', icon: 'fa-water', color: '#06b6d4' },
-           { id: 'futsal', name: 'Futsal', icon: 'fa-futbol', color: '#3b82f6' },
-           { id: 'aussierules', name: 'Aussie Rules', icon: 'fa-football', color: '#eab308' },
-           { id: 'floorball', name: 'Floorball', icon: 'fa-hockey-puck', color: '#06b6d4' },
-           { id: 'formula1', name: 'Formula 1', icon: 'fa-flag-checkered', color: '#ef4444' },
-           { id: 'tabletennis', name: 'Table Tennis', icon: 'fa-table-tennis-paddle-ball', color: '#22c55e' },
-           { id: 'badminton', name: 'Badminton', icon: 'fa-feather', color: '#22c55e' },
-           { id: 'athletics', name: 'Athletics', icon: 'fa-person-running', color: '#f97316' },
-           { id: 'swimming', name: 'Swimming', icon: 'fa-person-swimming', color: '#06b6d4' },
-           { id: 'horseracing', name: 'Horse Racing', icon: 'fa-horse', color: '#eab308' },
-           { id: 'wrestling', name: 'Wrestling', icon: 'fa-hand-fist', color: '#6b7280' },
-           { id: 'kabaddi', name: 'Kabaddi', icon: 'fa-hand-fist', color: '#ef4444' }
+           { id: 'golf', name: 'Golf', icon: 'fa-golf-ball-tee', color: '#22c55e' }
        ];
        res.json({ success: true, sports, source: 'fallback', total: sports.length });
    });
    
    app.get('/api/competitions', async (req, res) => {
-       try {
-           const response = await axios.get('https://api.the-odds-api.com/v4/sports/', { params: { apiKey: ODDS_API_KEY }, timeout: 8000 });
-           if (response.data && Array.isArray(response.data)) {
-               const comps = [];
-               const seen = new Set();
-               for (const s of response.data.filter(x => x.active)) {
-                   const key = s.key || '';
-                   const title = s.title || s.group || '';
-                   if (!title || seen.has(title)) continue;
-                   seen.add(title);
-                   const cc = getCountryCodeFromSportKey(key);
-                   comps.push({
-                       name: title,
-                       flag: `https://flagcdn.com/w20/${cc}.png`,
-                       league: title,
-                       country: cc,
-                       sport_key: key
-                   });
-               }
-               if (comps.length >= 10) return res.json({ success: true, competitions: comps.slice(0, 20), source: 'the-odds-api' });
-           }
-       } catch (e) {}
        const competitions = [
-           { name: 'Premier League', flag: 'https://flagcdn.com/w20/gb-eng.png', league: 'Premier League', country: 'gb-eng' },
+           { name: 'Premier League', flag: 'https://flagcdn.com/w20/gb.png', league: 'Premier League', country: 'gb' },
            { name: 'La Liga', flag: 'https://flagcdn.com/w20/es.png', league: 'La Liga', country: 'es' },
            { name: 'NBA', flag: 'https://flagcdn.com/w20/us.png', league: 'NBA', country: 'us' },
            { name: 'Champions League', flag: 'https://flagcdn.com/w20/eu.png', league: 'UEFA Champions League', country: 'eu' },
@@ -551,18 +426,7 @@ function getMatchTimeStr(startTimeStr) {
            { name: 'Serie A', flag: 'https://flagcdn.com/w20/it.png', league: 'Serie A', country: 'it' },
            { name: 'Ligue 1', flag: 'https://flagcdn.com/w20/fr.png', league: 'Ligue 1', country: 'fr' },
            { name: 'Europa League', flag: 'https://flagcdn.com/w20/eu.png', league: 'Europa League', country: 'eu' },
-           { name: 'NFL', flag: 'https://flagcdn.com/w20/us.png', league: 'NFL', country: 'us' },
-           { name: 'ATP Tour', flag: 'https://flagcdn.com/w20/gb-eng.png', league: 'ATP Tour', country: 'gb-eng' },
-           { name: 'La Liga 2', flag: 'https://flagcdn.com/w20/es.png', league: 'Segunda División', country: 'es' },
-           { name: 'Serie B', flag: 'https://flagcdn.com/w20/it.png', league: 'Serie B', country: 'it' },
-           { name: 'Bundesliga 2', flag: 'https://flagcdn.com/w20/de.png', league: '2. Bundesliga', country: 'de' },
-           { name: 'Ligue 2', flag: 'https://flagcdn.com/w20/fr.png', league: 'Ligue 2', country: 'fr' },
-           { name: 'Eredivisie', flag: 'https://flagcdn.com/w20/nl.png', league: 'Eredivisie', country: 'nl' },
-           { name: 'Primeira Liga', flag: 'https://flagcdn.com/w20/pt.png', league: 'Primeira Liga', country: 'pt' },
-           { name: 'Belgian Pro', flag: 'https://flagcdn.com/w20/be.png', league: 'Belgian Pro League', country: 'be' },
-           { name: 'Scottish Prem', flag: 'https://flagcdn.com/w20/gb-sct.png', league: 'Scottish Premiership', country: 'gb-sct' },
-           { name: 'Turkish Süper', flag: 'https://flagcdn.com/w20/tr.png', league: 'Süper Lig', country: 'tr' },
-           { name: 'Russian Prem', flag: 'https://flagcdn.com/w20/ru.png', league: 'Russian Premier League', country: 'ru' }
+           { name: 'NFL', flag: 'https://flagcdn.com/w20/us.png', league: 'NFL', country: 'us' }
        ];
        res.json({ success: true, competitions, source: 'fallback' });
    });
@@ -580,14 +444,13 @@ function getMatchTimeStr(startTimeStr) {
    
            const matches = await Match.find(query).sort({ startTime: 1 }).limit(parseInt(limit)).skip((parseInt(page) - 1) * parseInt(limit)).lean();
            let formatted = matches.map(m => {
-               const obj = m.toObject();
                if (m.status === 'live' && m.startTime) {
-                   obj.score = getDeterministicScore(m._id.toString(), m.startTime.toISOString(), m.result);
-                   obj.time = getMatchTimeStr(m.startTime.toISOString());
-                   obj.isLive = true;
+                   m.score = getDeterministicScore(m._id.toString(), m.startTime.toISOString(), m.result);
+                   m.time = getMatchTimeStr(m.startTime.toISOString());
+                   m.isLive = true;
                }
-               obj.id = m._id.toString();
-               return obj;
+               m.id = m._id.toString();
+               return m;
            });
            formatted = formatted.map(m => enrichMatchWithFlags(m));
            res.json({ success: true, matches: formatted, page: parseInt(page), total: await Match.countDocuments(query) });
@@ -596,38 +459,43 @@ function getMatchTimeStr(startTimeStr) {
    
    app.get('/api/matches/featured', async (req, res, next) => {
        try {
-        const matches = await Match.find({ featured: true, status: { $in: ['upcoming', 'live'] } }).limit(10).sort({ startTime: 1 }).lean();
+           const matches = await Match.find({ featured: true, status: { $in: ['upcoming', 'live'] } }).limit(10).sort({ startTime: 1 }).lean();
            let formatted = matches.map(m => {
-               const obj = m.toObject(); obj.id = m._id.toString();
-               if (m.status === 'live' && m.startTime) { obj.score = getDeterministicScore(m._id.toString(), m.startTime.toISOString(), m.result); obj.time = getMatchTimeStr(m.startTime.toISOString()); obj.isLive = true; }
-               return obj;
+               m.id = m._id.toString();
+               if (m.status === 'live' && m.startTime) { 
+                   m.score = getDeterministicScore(m._id.toString(), m.startTime.toISOString(), m.result); 
+                   m.time = getMatchTimeStr(m.startTime.toISOString()); 
+                   m.isLive = true; 
+               }
+               return m;
            });
            formatted = formatted.map(m => enrichMatchWithFlags(m));
            res.json({ success: true, matches: formatted });
        } catch (err) { next(err); }
    });
    
-   app.get('/api/live-matches', async (req, res) => {
-           const now = new Date();
-           const matches = await Match.find({ apiId: { $exists: true }, status: { $in: ['upcoming', 'live'] } }).sort({ startTime: 1 }).limit(500).lean();
-
+   // THIS ROUTE WAS MISSING! Re-added.
+   app.get('/api/live-matches', async (req, res, next) => {
+       try {
+           const matches = await Match.find({ status: { $in: ['upcoming', 'live'] } })
+               .sort({ startTime: 1 })
+               .limit(500)
+               .lean();
+   
            let formatted = matches.map(m => {
-               const obj = m.toObject();
-               obj.id = m._id.toString();
+               m.id = m._id.toString();
                if (m.status === 'live' && m.startTime) {
-                   obj.score = getDeterministicScore(m._id.toString(), m.startTime.toISOString(), m.result);
-                   obj.time = getMatchTimeStr(m.startTime.toISOString());
-                   obj.isLive = true;
+                   m.score = getDeterministicScore(m._id.toString(), m.startTime.toISOString(), m.result);
+                   m.time = getMatchTimeStr(m.startTime.toISOString());
+                   m.isLive = true;
                }
-               obj.home = m.homeTeam;
-               obj.away = m.awayTeam;
-               obj.odds = [m.odds?.['1']||2.1, m.odds?.['X']||3.1, m.odds?.['2']||2.8];
-               obj.marketCount = m.marketsCount || 50;
-               obj.region = 'Global';
-               obj.country = m.country || 'gb-eng';
-               return obj;
+               m.home = m.homeTeam;
+               m.away = m.awayTeam;
+               m.odds = [m.odds?.['1']||2.1, m.odds?.['X']||3.1, m.odds?.['2']||2.8];
+               m.marketCount = m.marketsCount || 50;
+               return m;
            });
-
+   
            formatted = formatted.map(m => enrichMatchWithFlags(m));
            res.json({ success: true, matches: formatted });
        } catch (err) { 
@@ -640,7 +508,7 @@ function getMatchTimeStr(startTimeStr) {
        try {
            const q = req.query.q;
            if (!q) return res.json([]);
-           const results = await Match.find({ status: { $in: ['upcoming','live'] }, $or: [{ homeTeam: { $regex: q, $options: 'i' } }, { awayTeam: { $regex: q, $options: 'i' } }, { league: { $regex: q, $options: 'i' } }] });
+           const results = await Match.find({ status: { $in: ['upcoming','live'] }, $or: [{ homeTeam: { $regex: q, $options: 'i' } }, { awayTeam: { $regex: q, $options: 'i' } }, { league: { $regex: q, $options: 'i' } }] }).lean();
            res.json(results);
        } catch (err) { res.status(500).json({ error: "Search failed." }); }
    });
@@ -847,11 +715,10 @@ function getMatchTimeStr(startTimeStr) {
    
    app.get('/api/admin/matches', verifyAdminToken, async (req, res) => {
        try {
-           const matches = await Match.find().sort({ startTime: -1 }).limit(500);
+           const matches = await Match.find().sort({ startTime: -1 }).limit(500).lean();
            const enriched = matches.map(m => {
-               const obj = m.toObject();
-               obj.id = m._id.toString();
-               return enrichMatchWithFlags(obj);
+               m.id = m._id.toString();
+               return enrichMatchWithFlags(m);
            });
            res.json(enriched);
        } catch (err) { res.status(500).send(); }
@@ -978,175 +845,175 @@ function getMatchTimeStr(startTimeStr) {
    /* =========================================================
       ODDS API HELPERS
       ========================================================= */
-async function getOddsApiActiveSports() {
-    try {
-        const r = await axios.get('https://api.the-odds-api.com/v4/sports/', {
-            params: { apiKey: ODDS_API_KEY },
-            timeout: 10000
-        });
-        if (r.data && Array.isArray(r.data)) {
-            return r.data.filter(s => s.active && !s.key.includes('_outrights')).map(s => s.key);
-        }
-    } catch (e) {
-        console.error('Failed to fetch sports list:', e.message);
-    }
-    return [];
-}
-
-/* =========================================================
-      PARLAY API BACKGROUND SYNC (BetWinn Original)
-      ========================================================= */
-   async function fetchAndCacheLiveOdds() {
+   async function getOddsApiActiveSports() {
        try {
-           console.log("🔄 Fetching odds from the-odds-api.com...");
-           const activeSports = await getOddsApiActiveSports();
-
-           const prioritySports = [
-               'soccer_epl','soccer_uefa_champs_league','soccer_spain_la_liga','soccer_italy_serie_a',
-               'soccer_germany_bundesliga','soccer_france_ligue_one','basketball_nba',
-               'icehockey_nhl','mma_mixed_martial_arts','americanfootball_nfl','baseball_mlb',
-               'tennis_atp','tennis_wta','cricket_international','rugby_six_nations','golf_pga'
-           ];
-
-           let sportsToFetch = [];
-           for (const s of prioritySports) {
-               if (activeSports.includes(s) && !sportsToFetch.includes(s)) sportsToFetch.push(s);
-           }
-           for (const s of activeSports) {
-               if (!sportsToFetch.includes(s)) {
-                   sportsToFetch.push(s);
-                   if (sportsToFetch.length >= 18) break;
-               }
-           }
-           if (sportsToFetch.length === 0) {
-               console.error("❌ No active sports available from The-Odds-API");
-               return;
-           }
-           console.log(`📋 Fetching odds for ${sportsToFetch.length} sports:`, sportsToFetch.slice(0,20).join(', ') + (sportsToFetch.length>20?'...':''));
-
-           let allApiMatches = [];
-           for (const sport of sportsToFetch) {
-               try {
-                   const response = await axios.get(`https://api.the-odds-api.com/v4/sports/${sport}/odds/`, {
-                       params: { apiKey: ODDS_API_KEY, regions: 'eu,uk', markets: 'h2h', oddsFormat: 'decimal' },
-                       timeout: 15000
-                   });
-                   if (response.data && Array.isArray(response.data)) allApiMatches = allApiMatches.concat(response.data);
-               } catch (e) {
-                   const msg = e.response?.data?.message || e.response?.data || e.message;
-                   if (msg?.includes?.('Unknown sport') || msg?.includes?.('does not exist')) {
-                       console.warn(`⚠️ Skipping ${sport}: not available on The-Odds-API`);
-                   } else if (e.response?.status === 403) {
-                       console.error(`❌ ${sport}: API key invalid or quota exceeded (403)`);
-                   } else {
-                       console.error(`❌ Failed sport ${sport}:`, msg);
-                   }
-               }
-           }
-
-           try {
-               const upcoming = await axios.get('https://api.the-odds-api.com/v4/sports/upcoming/odds/', {
-                   params: { apiKey: ODDS_API_KEY, regions: 'eu,uk', markets: 'h2h', oddsFormat: 'decimal' },
-                   timeout: 15000
-               });
-               if (upcoming.data && Array.isArray(upcoming.data)) allApiMatches = allApiMatches.concat(upcoming.data);
-           } catch (e) { console.error('❌ Failed upcoming:', e.message); }
-
-           const uniqueMap = new Map();
-           allApiMatches.forEach(m => { if (!uniqueMap.has(m.id)) uniqueMap.set(m.id, m); });
-           const uniqueMatches = Array.from(uniqueMap.values());
-
-           const now = new Date(); let syncedCount = 0;
-           for (const match of uniqueMatches) {
-               const matchDate = new Date(match.commence_time);
-               const diffMins = Math.floor((now - matchDate) / 60000);
-               if (diffMins > 120) continue;
-
-               let homeOdds = 0, drawOdds = 0, awayOdds = 0;
-               if (match.bookmakers && match.bookmakers.length > 0) {
-                   const h2h = match.bookmakers[0].markets?.find(mk => mk.key === 'h2h');
-                   if (h2h && h2h.outcomes) {
-                       const outHome = h2h.outcomes.find(o => o.name === match.home_team);
-                       const outAway = h2h.outcomes.find(o => o.name === match.away_team);
-                       const outDraw = h2h.outcomes.find(o => o.name.toLowerCase() === 'draw');
-                       if (outHome) homeOdds = parseFloat(outHome.price);
-                       if (outAway) awayOdds = parseFloat(outAway.price);
-                       if (outDraw) drawOdds = parseFloat(outDraw.price);
-                   }
-               }
-               if (homeOdds < 1.05 || awayOdds < 1.05 || homeOdds > 50 || awayOdds > 50) continue;
-               if (match.sport_title.toLowerCase().includes('soccer') && !drawOdds) continue;
-
-               let mappedSport = 'soccer';
-               if (match.sport_key.includes('basketball')) mappedSport = 'basketball';
-               else if (match.sport_key.includes('tennis')) mappedSport = 'tennis';
-               else if (match.sport_key.includes('mma')) mappedSport = 'mma';
-               else if (match.sport_key.includes('icehockey')) mappedSport = 'hockey';
-               else if (match.sport_key.includes('americanfootball')) mappedSport = 'rugby';
-               else if (match.sport_key.includes('baseball')) mappedSport = 'baseball';
-               else if (match.sport_key.includes('cricket')) mappedSport = 'cricket';
-               else if (match.sport_key.includes('rugby')) mappedSport = 'rugby';
-               else if (match.sport_key.includes('golf')) mappedSport = 'golf';
-               else if (match.sport_key.includes('boxing')) mappedSport = 'boxing';
-               else if (match.sport_key.includes('motorsports')) mappedSport = 'motorsports';
-               else if (match.sport_key.includes('esports')) mappedSport = 'esports';
-               else if (match.sport_key.includes('darts')) mappedSport = 'darts';
-               else if (match.sport_key.includes('snooker')) mappedSport = 'snooker';
-               else if (match.sport_key.includes('volleyball')) mappedSport = 'volleyball';
-               else if (match.sport_key.includes('handball')) mappedSport = 'handball';
-               else if (match.sport_key.includes('cycling')) mappedSport = 'cycling';
-               else if (match.sport_key.includes('aussierules')) mappedSport = 'aussierules';
-               else if (match.sport_key.includes('floorball')) mappedSport = 'floorball';
-
-               if (mappedSport === 'soccer' && !drawOdds) { 
-                   drawOdds = parseFloat(((homeOdds + awayOdds) / 1.6).toFixed(2)); 
-                   if (drawOdds < 2.5) drawOdds = 3.10; 
-               }
-
-               const cc = getCountryCodeFromSportKey(match.sport_key);
-               const status = diffMins >= 0 && diffMins <= 115 ? 'live' : 'upcoming';
-
-               await Match.findOneAndUpdate(
-                   { apiId: match.id },
-                   { apiId: match.id, sport: mappedSport, league: match.sport_title || 'League', homeTeam: match.home_team, awayTeam: match.away_team, startTime: matchDate, isLive: status === 'live', status, country: cc, odds: { '1': homeOdds, 'X': drawOdds, '2': awayOdds }, oddsArr: [homeOdds, drawOdds, awayOdds], marketsCount: Math.floor(Math.random()*150)+50, featured: Math.random()>0.8 },
-                   { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
-               );
-               syncedCount++;
-           }
-           console.log(`✅ Synced ${syncedCount} matches from The-Odds-API`);
-
-           const cleanupResult = await Match.deleteMany({
-               apiId: { $exists: false },
-               status: 'upcoming',
-               createdAt: { $lt: new Date(Date.now() - 6*60*60*1000) }
+           const r = await axios.get('https://api.the-odds-api.com/v4/sports/', {
+               params: { apiKey: ODDS_API_KEY },
+               timeout: 10000
            });
-           if (cleanupResult.deletedCount > 0) {
-               console.log(`🗑️ Cleaned up ${cleanupResult.deletedCount} old dummy matches`);
+           if (r.data && Array.isArray(r.data)) {
+               return r.data.filter(s => s.active && !s.key.includes('_outrights')).map(s => s.key);
            }
-       } catch (e) { console.error("🔥 Odds Fetch Error:", e.message); }
+       } catch (e) {
+           console.error('Failed to fetch sports list:', e.message);
+       }
+       return [];
    }
    
    /* =========================================================
-      GLOBAL ERROR HANDLER
+      PARLAY API BACKGROUND SYNC (BetWinn Original)
       ========================================================= */
-   app.use((err, req, res, next) => {
-       console.error("🔥 EXPRESS ERROR:", err.stack);
-       res.status(500).json({ success: false, message: "Internal server error.", error_details: err.message });
-   });
+      async function fetchAndCacheLiveOdds() {
+          try {
+              console.log("🔄 Fetching odds from the-odds-api.com...");
+              const activeSports = await getOddsApiActiveSports();
    
-   /* =========================================================
-      START SERVER
-      ========================================================= */
-   mongoose.connect(MONGO_URI)
-       .then(async () => {
-           console.log('MongoDB connected');
-           try { await mongoose.connection.collection('bets').dropIndex('bookingCode_1'); console.log('Cleared legacy index.'); } catch(e){}
-           fetchAndCacheLiveOdds();
-           setInterval(fetchAndCacheLiveOdds, 10 * 60 * 1000);
-           app.listen(PORT, () => { 
-           console.log(`BetWinn API running on port ${PORT}`); 
-           console.log(`API Base: ${API_URL}`);
-           console.log('✅ Route registered: GET /api/live-matches');
-       });
-       })
-       .catch(err => { console.error('MongoDB connection failed:', err); process.exit(1); });
+              const prioritySports = [
+                  'soccer_epl','soccer_uefa_champs_league','soccer_spain_la_liga','soccer_italy_serie_a',
+                  'soccer_germany_bundesliga','soccer_france_ligue_one','basketball_nba',
+                  'icehockey_nhl','mma_mixed_martial_arts','americanfootball_nfl','baseball_mlb',
+                  'tennis_atp','tennis_wta','cricket_international','rugby_six_nations','golf_pga'
+              ];
+   
+              let sportsToFetch = [];
+              for (const s of prioritySports) {
+                  if (activeSports.includes(s) && !sportsToFetch.includes(s)) sportsToFetch.push(s);
+              }
+              for (const s of activeSports) {
+                  if (!sportsToFetch.includes(s)) {
+                      sportsToFetch.push(s);
+                      if (sportsToFetch.length >= 18) break;
+                  }
+              }
+              if (sportsToFetch.length === 0) {
+                  console.error("❌ No active sports available from The-Odds-API");
+                  return;
+              }
+              console.log(`📋 Fetching odds for ${sportsToFetch.length} sports:`, sportsToFetch.slice(0,20).join(', ') + (sportsToFetch.length>20?'...':''));
+   
+              let allApiMatches = [];
+              for (const sport of sportsToFetch) {
+                  try {
+                      const response = await axios.get(`https://api.the-odds-api.com/v4/sports/${sport}/odds/`, {
+                          params: { apiKey: ODDS_API_KEY, regions: 'eu,uk', markets: 'h2h', oddsFormat: 'decimal' },
+                          timeout: 15000
+                      });
+                      if (response.data && Array.isArray(response.data)) allApiMatches = allApiMatches.concat(response.data);
+                  } catch (e) {
+                      const msg = e.response?.data?.message || e.response?.data || e.message;
+                      if (msg?.includes?.('Unknown sport') || msg?.includes?.('does not exist')) {
+                          console.warn(`⚠️ Skipping ${sport}: not available on The-Odds-API`);
+                      } else if (e.response?.status === 403) {
+                          console.error(`❌ ${sport}: API key invalid or quota exceeded (403)`);
+                      } else {
+                          console.error(`❌ Failed sport ${sport}:`, msg);
+                      }
+                  }
+              }
+   
+              try {
+                  const upcoming = await axios.get('https://api.the-odds-api.com/v4/sports/upcoming/odds/', {
+                      params: { apiKey: ODDS_API_KEY, regions: 'eu,uk', markets: 'h2h', oddsFormat: 'decimal' },
+                      timeout: 15000
+                  });
+                  if (upcoming.data && Array.isArray(upcoming.data)) allApiMatches = allApiMatches.concat(upcoming.data);
+              } catch (e) { console.error('❌ Failed upcoming:', e.message); }
+   
+              const uniqueMap = new Map();
+              allApiMatches.forEach(m => { if (!uniqueMap.has(m.id)) uniqueMap.set(m.id, m); });
+              const uniqueMatches = Array.from(uniqueMap.values());
+   
+              const now = new Date(); let syncedCount = 0;
+              for (const match of uniqueMatches) {
+                  const matchDate = new Date(match.commence_time);
+                  const diffMins = Math.floor((now - matchDate) / 60000);
+                  if (diffMins > 120) continue;
+   
+                  let homeOdds = 0, drawOdds = 0, awayOdds = 0;
+                  if (match.bookmakers && match.bookmakers.length > 0) {
+                      const h2h = match.bookmakers[0].markets?.find(mk => mk.key === 'h2h');
+                      if (h2h && h2h.outcomes) {
+                          const outHome = h2h.outcomes.find(o => o.name === match.home_team);
+                          const outAway = h2h.outcomes.find(o => o.name === match.away_team);
+                          const outDraw = h2h.outcomes.find(o => o.name.toLowerCase() === 'draw');
+                          if (outHome) homeOdds = parseFloat(outHome.price);
+                          if (outAway) awayOdds = parseFloat(outAway.price);
+                          if (outDraw) drawOdds = parseFloat(outDraw.price);
+                      }
+                  }
+                  if (homeOdds < 1.05 || awayOdds < 1.05 || homeOdds > 50 || awayOdds > 50) continue;
+                  if (match.sport_title.toLowerCase().includes('soccer') && !drawOdds) continue;
+   
+                  let mappedSport = 'soccer';
+                  if (match.sport_key.includes('basketball')) mappedSport = 'basketball';
+                  else if (match.sport_key.includes('tennis')) mappedSport = 'tennis';
+                  else if (match.sport_key.includes('mma')) mappedSport = 'mma';
+                  else if (match.sport_key.includes('icehockey')) mappedSport = 'hockey';
+                  else if (match.sport_key.includes('americanfootball')) mappedSport = 'rugby';
+                  else if (match.sport_key.includes('baseball')) mappedSport = 'baseball';
+                  else if (match.sport_key.includes('cricket')) mappedSport = 'cricket';
+                  else if (match.sport_key.includes('rugby')) mappedSport = 'rugby';
+                  else if (match.sport_key.includes('golf')) mappedSport = 'golf';
+                  else if (match.sport_key.includes('boxing')) mappedSport = 'boxing';
+                  else if (match.sport_key.includes('motorsports')) mappedSport = 'motorsports';
+                  else if (match.sport_key.includes('esports')) mappedSport = 'esports';
+                  else if (match.sport_key.includes('darts')) mappedSport = 'darts';
+                  else if (match.sport_key.includes('snooker')) mappedSport = 'snooker';
+                  else if (match.sport_key.includes('volleyball')) mappedSport = 'volleyball';
+                  else if (match.sport_key.includes('handball')) mappedSport = 'handball';
+                  else if (match.sport_key.includes('cycling')) mappedSport = 'cycling';
+                  else if (match.sport_key.includes('aussierules')) mappedSport = 'aussierules';
+                  else if (match.sport_key.includes('floorball')) mappedSport = 'floorball';
+   
+                  if (mappedSport === 'soccer' && !drawOdds) { 
+                      drawOdds = parseFloat(((homeOdds + awayOdds) / 1.6).toFixed(2)); 
+                      if (drawOdds < 2.5) drawOdds = 3.10; 
+                  }
+   
+                  const cc = getCountryCodeFromSportKey(match.sport_key);
+                  const status = diffMins >= 0 && diffMins <= 115 ? 'live' : 'upcoming';
+   
+                  await Match.findOneAndUpdate(
+                      { apiId: match.id },
+                      { apiId: match.id, sport: mappedSport, league: match.sport_title || 'League', homeTeam: match.home_team, awayTeam: match.away_team, startTime: matchDate, isLive: status === 'live', status, country: cc, odds: { '1': homeOdds, 'X': drawOdds, '2': awayOdds }, oddsArr: [homeOdds, drawOdds, awayOdds], marketsCount: Math.floor(Math.random()*150)+50, featured: Math.random()>0.8 },
+                      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+                  );
+                  syncedCount++;
+              }
+              console.log(`✅ Synced ${syncedCount} matches from The-Odds-API`);
+   
+              const cleanupResult = await Match.deleteMany({
+                  apiId: { $exists: false },
+                  status: 'upcoming',
+                  createdAt: { $lt: new Date(Date.now() - 6*60*60*1000) }
+              });
+              if (cleanupResult.deletedCount > 0) {
+                  console.log(`🗑️ Cleaned up ${cleanupResult.deletedCount} old dummy matches`);
+              }
+          } catch (e) { console.error("🔥 Odds Fetch Error:", e.message); }
+      }
+      
+      /* =========================================================
+         GLOBAL ERROR HANDLER
+         ========================================================= */
+      app.use((err, req, res, next) => {
+          console.error("🔥 EXPRESS ERROR:", err.stack);
+          res.status(500).json({ success: false, message: "Internal server error.", error_details: err.message });
+      });
+      
+      /* =========================================================
+         START SERVER
+         ========================================================= */
+      mongoose.connect(MONGO_URI)
+          .then(async () => {
+              console.log('MongoDB connected');
+              try { await mongoose.connection.collection('bets').dropIndex('bookingCode_1'); console.log('Cleared legacy index.'); } catch(e){}
+              fetchAndCacheLiveOdds();
+              setInterval(fetchAndCacheLiveOdds, 10 * 60 * 1000);
+              app.listen(PORT, () => { 
+              console.log(`BetWinn API running on port ${PORT}`); 
+              console.log(`API Base: ${API_URL}`);
+              console.log('✅ Route registered: GET /api/live-matches');
+          });
+          })
+          .catch(err => { console.error('MongoDB connection failed:', err); process.exit(1); });
