@@ -23,7 +23,7 @@
    const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/betwinn';
    const API_URL = process.env.NODE_ENV === 'production' ? 'https://api.betwinn.co.ke/api' : `http://localhost:${PORT}/api`;
    
-   // Updated to use your new Parlay API Key
+   // Configured to use your active Parlay API Key
    const PARLAY_API_KEY = process.env.PARLAY_API_KEY || '627778f98df49b4c7d459b1760997abd';
    
    /* =========================================================
@@ -99,7 +99,7 @@
    const betSchema = new mongoose.Schema({
        userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
        selections: [{
-           matchId: { type: Number, required: true }, 
+           matchId: { type: String, required: true }, 
            pick: { type: String, required: true },
            odd: { type: Number, required: true },
            title: { type: String }
@@ -317,7 +317,6 @@
            
            for (const sport of sportsToFetch) {
                try {
-                   // Switched to Parlay API
                    const response = await axios.get(`https://parlay-api.com/v4/sports/${sport}/odds?apiKey=${PARLAY_API_KEY}&regions=us,eu,uk&markets=h2h,spreads`);
                    if (response.data && Array.isArray(response.data)) {
                        allApiMatches = allApiMatches.concat(response.data);
@@ -376,7 +375,7 @@
                        marketsCount: Math.floor(Math.random() * 150) + 50, 
                        featured: Math.random() > 0.8
                    },
-                   { upsert: true,returnDocument: 'after', setDefaultsOnInsert: true }
+                   { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
                );
                syncedCount++;
            }
