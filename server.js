@@ -376,7 +376,7 @@
                        marketsCount: Math.floor(Math.random() * 150) + 50, 
                        featured: Math.random() > 0.8
                    },
-                   { upsert: true, new: true, setDefaultsOnInsert: true }
+                   { upsert: true,returnDocument: 'after', setDefaultsOnInsert: true }
                );
                syncedCount++;
            }
