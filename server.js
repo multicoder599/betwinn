@@ -135,7 +135,10 @@
         'darts_pdc': 'gb-eng', 'snooker_world': 'gb-eng', 'handball_germany': 'de', 'handball_spain': 'es',
         'handball_france': 'fr', 'handball_denmark': 'dk', 'waterpolo_italy': 'it', 'waterpolo_spain': 'es',
         'futsal_spain': 'es', 'futsal_portugal': 'pt', 'aussierules_afl': 'au', 'floorball_sweden': 'se',
-        'floorball_finland': 'fi', 'floorball_switzerland': 'ch'
+        'floorball_finland': 'fi', 'floorball_switzerland': 'ch',
+        'esports': 'us', 'esports_lol': 'kr', 'esports_csgo': 'se', 'esports_dota2': 'us', 'esports_valorant': 'us',
+        'cricket_international': 'gb-eng', 'cricket_test': 'gb-eng', 'cricket_odi': 'in', 'cricket_t20': 'in',
+        'rugby_six_nations': 'gb-eng', 'rugby_world_cup': 'gb-eng',
     };
     for (const [prefix, code] of Object.entries(map)) {
         if (sportKey.toLowerCase().startsWith(prefix)) return code;
@@ -504,7 +507,7 @@ function getMatchTimeStr(startTimeStr) {
                });
                const seen = new Set();
                const deduped = mapped.filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; });
-               return res.json({ success: true, sports: deduped.slice(0, 50), source: 'the-odds-api', total: deduped.length });
+               return res.json({ success: true, sports: deduped.slice(0, 60), source: 'the-odds-api', total: deduped.length });
            }
        } catch (e) {}
        const sports = [
@@ -633,13 +636,34 @@ function getMatchTimeStr(startTimeStr) {
    app.get('/api/live-matches', async (req, res) => {
        try {
            const now = new Date();
-           let dbMatches = (await Match.find({ status: { $in: ['upcoming', 'live'] } }).sort({ startTime: 1 })).map(m => {
-               const obj = m.toObject(); obj.id = m._id.toString();
-               if (m.status === 'live' && m.startTime) { obj.score = getDeterministicScore(m._id.toString(), m.startTime.toISOString(), m.result); obj.time = getMatchTimeStr(m.startTime.toISOString()); obj.isLive = true; }
-               obj.home = m.homeTeam; obj.away = m.awayTeam; obj.odds = [m.odds?.['1']||2.1, m.odds?.['X']||3.1, m.odds?.['2']||2.8];
-               obj.marketCount = m.marketsCount || 50; obj.region = 'Global'; obj.country = m.country || 'gb-eng';
+           const matches = await Match.find({ status: { $in: ['upcoming', 'live'] } })
+               .sort({ startTime: 1 })
+               .limit(500);
+
+           let formatted = matches.map(m => {
+               const obj = m.toObject();
+               obj.id = m._id.toString();
+               if (m.status === 'live' && m.startTime) {
+                   obj.score = getDeterministicScore(m._id.toString(), m.startTime.toISOString(), m.result);
+                   obj.time = getMatchTimeStr(m.startTime.toISOString());
+                   obj.isLive = true;
+               }
+               obj.home = m.homeTeam;
+               obj.away = m.awayTeam;
+               obj.odds = [m.odds?.['1']||2.1, m.odds?.['X']||3.1, m.odds?.['2']||2.8];
+               obj.marketCount = m.marketsCount || 50;
+               obj.region = 'Global';
+               obj.country = m.country || 'gb-eng';
                return obj;
            });
+
+           formatted = formatted.map(m => enrichMatchWithFlags(m));
+           res.json({ success: true, matches: formatted });
+       } catch (err) { 
+           console.error("Live matches error:", err);
+           res.status(500).json({ error: "Fetch failed." }); 
+       }
+   });
    
            const tomorrow = new Date(); tomorrow.setDate(now.getDate()+1); tomorrow.setHours(0,0,0,0);
            const nextWeek = new Date(); nextWeek.setDate(now.getDate()+7);
@@ -1024,16 +1048,54 @@ function getMatchTimeStr(startTimeStr) {
    }, 60000);
    
    /* =========================================================
+      ODDS API HELPERS
+      ========================================================= */
+async function getOddsApiActiveSports() {
+    try {
+        const r = await axios.get('https://api.the-odds-api.com/v4/sports/', {
+            params: { apiKey: ODDS_API_KEY },
+            timeout: 10000
+        });
+        if (r.data && Array.isArray(r.data)) {
+            return r.data.filter(s => s.active && !s.key.includes('_outrights')).map(s => s.key);
+        }
+    } catch (e) {
+        console.error('Failed to fetch sports list:', e.message);
+    }
+    return [];
+}
+
+/* =========================================================
       PARLAY API BACKGROUND SYNC (BetWinn Original)
       ========================================================= */
    async function fetchAndCacheLiveOdds() {
        try {
            console.log("🔄 Fetching odds from the-odds-api.com...");
-           const sportsToFetch = [
+           const activeSports = await getOddsApiActiveSports();
+
+           const prioritySports = [
                'soccer_epl','soccer_uefa_champs_league','soccer_spain_la_liga','soccer_italy_serie_a',
                'soccer_germany_bundesliga','soccer_france_ligue_one','basketball_nba',
-               'icehockey_nhl','mma_mixed_martial_arts','americanfootball_nfl','baseball_mlb'
+               'icehockey_nhl','mma_mixed_martial_arts','americanfootball_nfl','baseball_mlb',
+               'tennis_atp','tennis_wta','cricket_international','rugby_six_nations','golf_pga'
            ];
+
+           let sportsToFetch = [];
+           for (const s of prioritySports) {
+               if (activeSports.includes(s) && !sportsToFetch.includes(s)) sportsToFetch.push(s);
+           }
+           for (const s of activeSports) {
+               if (!sportsToFetch.includes(s)) {
+                   sportsToFetch.push(s);
+                   if (sportsToFetch.length >= 18) break;
+               }
+           }
+           if (sportsToFetch.length === 0) {
+               console.error("❌ No active sports available from The-Odds-API");
+               return;
+           }
+           console.log(`📋 Fetching odds for ${sportsToFetch.length} sports:`, sportsToFetch.slice(0,20).join(', ') + (sportsToFetch.length>20?'...':''));
+
            let allApiMatches = [];
            for (const sport of sportsToFetch) {
                try {
@@ -1053,7 +1115,7 @@ function getMatchTimeStr(startTimeStr) {
                    }
                }
            }
-           // Also fetch upcoming across all sports
+
            try {
                const upcoming = await axios.get('https://api.the-odds-api.com/v4/sports/upcoming/odds/', {
                    params: { apiKey: ODDS_API_KEY, regions: 'eu,uk', markets: 'h2h', oddsFormat: 'decimal' },
@@ -1062,7 +1124,6 @@ function getMatchTimeStr(startTimeStr) {
                if (upcoming.data && Array.isArray(upcoming.data)) allApiMatches = allApiMatches.concat(upcoming.data);
            } catch (e) { console.error('❌ Failed upcoming:', e.message); }
 
-           // Deduplicate
            const uniqueMap = new Map();
            allApiMatches.forEach(m => { if (!uniqueMap.has(m.id)) uniqueMap.set(m.id, m); });
            const uniqueMatches = Array.from(uniqueMap.values());
@@ -1071,7 +1132,7 @@ function getMatchTimeStr(startTimeStr) {
            for (const match of uniqueMatches) {
                const matchDate = new Date(match.commence_time);
                const diffMins = Math.floor((now - matchDate) / 60000);
-               if (diffMins > 120) continue; // Skip finished matches
+               if (diffMins > 120) continue;
 
                let homeOdds = 0, drawOdds = 0, awayOdds = 0;
                if (match.bookmakers && match.bookmakers.length > 0) {
@@ -1085,18 +1146,34 @@ function getMatchTimeStr(startTimeStr) {
                        if (outDraw) drawOdds = parseFloat(outDraw.price);
                    }
                }
-               // Skip invalid odds
                if (homeOdds < 1.05 || awayOdds < 1.05 || homeOdds > 50 || awayOdds > 50) continue;
                if (match.sport_title.toLowerCase().includes('soccer') && !drawOdds) continue;
 
                let mappedSport = 'soccer';
                if (match.sport_key.includes('basketball')) mappedSport = 'basketball';
-               if (match.sport_key.includes('tennis')) mappedSport = 'tennis';
-               if (match.sport_key.includes('mma')) mappedSport = 'mma';
-               if (match.sport_key.includes('icehockey')) mappedSport = 'hockey';
-               if (match.sport_key.includes('americanfootball')) mappedSport = 'rugby';
-               if (match.sport_key.includes('baseball')) mappedSport = 'baseball';
-               if (mappedSport === 'soccer' && !drawOdds) { drawOdds = parseFloat(((homeOdds + awayOdds) / 1.6).toFixed(2)); if (drawOdds < 2.5) drawOdds = 3.10; }
+               else if (match.sport_key.includes('tennis')) mappedSport = 'tennis';
+               else if (match.sport_key.includes('mma')) mappedSport = 'mma';
+               else if (match.sport_key.includes('icehockey')) mappedSport = 'hockey';
+               else if (match.sport_key.includes('americanfootball')) mappedSport = 'rugby';
+               else if (match.sport_key.includes('baseball')) mappedSport = 'baseball';
+               else if (match.sport_key.includes('cricket')) mappedSport = 'cricket';
+               else if (match.sport_key.includes('rugby')) mappedSport = 'rugby';
+               else if (match.sport_key.includes('golf')) mappedSport = 'golf';
+               else if (match.sport_key.includes('boxing')) mappedSport = 'boxing';
+               else if (match.sport_key.includes('motorsports')) mappedSport = 'motorsports';
+               else if (match.sport_key.includes('esports')) mappedSport = 'esports';
+               else if (match.sport_key.includes('darts')) mappedSport = 'darts';
+               else if (match.sport_key.includes('snooker')) mappedSport = 'snooker';
+               else if (match.sport_key.includes('volleyball')) mappedSport = 'volleyball';
+               else if (match.sport_key.includes('handball')) mappedSport = 'handball';
+               else if (match.sport_key.includes('cycling')) mappedSport = 'cycling';
+               else if (match.sport_key.includes('aussierules')) mappedSport = 'aussierules';
+               else if (match.sport_key.includes('floorball')) mappedSport = 'floorball';
+
+               if (mappedSport === 'soccer' && !drawOdds) { 
+                   drawOdds = parseFloat(((homeOdds + awayOdds) / 1.6).toFixed(2)); 
+                   if (drawOdds < 2.5) drawOdds = 3.10; 
+               }
 
                const cc = getCountryCodeFromSportKey(match.sport_key);
                const status = diffMins >= 0 && diffMins <= 115 ? 'live' : 'upcoming';
@@ -1109,6 +1186,15 @@ function getMatchTimeStr(startTimeStr) {
                syncedCount++;
            }
            console.log(`✅ Synced ${syncedCount} matches from The-Odds-API`);
+
+           const cleanupResult = await Match.deleteMany({
+               apiId: { $exists: false },
+               status: 'upcoming',
+               createdAt: { $lt: new Date(Date.now() - 6*60*60*1000) }
+           });
+           if (cleanupResult.deletedCount > 0) {
+               console.log(`🗑️ Cleaned up ${cleanupResult.deletedCount} old dummy matches`);
+           }
        } catch (e) { console.error("🔥 Odds Fetch Error:", e.message); }
    }
    
@@ -1128,7 +1214,7 @@ function getMatchTimeStr(startTimeStr) {
            console.log('MongoDB connected');
            try { await mongoose.connection.collection('bets').dropIndex('bookingCode_1'); console.log('Cleared legacy index.'); } catch(e){}
            fetchAndCacheLiveOdds();
-           setInterval(fetchAndCacheLiveOdds, 30 * 60 * 1000);
+           setInterval(fetchAndCacheLiveOdds, 10 * 60 * 1000);
            app.listen(PORT, () => { console.log(`BetWinn API running on port ${PORT}`); console.log(`API Base: ${API_URL}`); });
        })
        .catch(err => { console.error('MongoDB connection failed:', err); process.exit(1); });
