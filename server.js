@@ -95,7 +95,86 @@
        return map[countryCode] || 'UTC';
    };
    
-   function getMatchTimeStr(startTimeStr) {
+   function getCountryCodeFromSportKey(sportKey) {
+    if (!sportKey) return 'gb-eng';
+    const map = {
+        'soccer_epl': 'gb-eng', 'soccer_spain': 'es', 'soccer_italy': 'it', 'soccer_germany': 'de',
+        'soccer_france': 'fr', 'soccer_uefa': 'eu', 'soccer_netherlands': 'nl', 'soccer_portugal': 'pt',
+        'soccer_belgium': 'be', 'soccer_turkey': 'tr', 'soccer_russia': 'ru', 'soccer_ukraine': 'ua',
+        'soccer_denmark': 'dk', 'soccer_sweden': 'se', 'soccer_norway': 'no', 'soccer_finland': 'fi',
+        'soccer_switzerland': 'ch', 'soccer_austria': 'at', 'soccer_poland': 'pl', 'soccer_czech': 'cz',
+        'soccer_greece': 'gr', 'soccer_romania': 'ro', 'soccer_brazil': 'br', 'soccer_argentina': 'ar',
+        'soccer_mexico': 'mx', 'soccer_usa': 'us', 'soccer_canada': 'ca', 'soccer_australia': 'au',
+        'soccer_japan': 'jp', 'soccer_china': 'cn', 'soccer_korea': 'kr', 'soccer_india': 'in',
+        'soccer_saudi': 'sa', 'soccer_qatar': 'qa', 'soccer_uae': 'ae', 'soccer_egypt': 'eg',
+        'soccer_morocco': 'ma', 'soccer_nigeria': 'ng', 'soccer_southafrica': 'za', 'soccer_ghana': 'gh',
+        'soccer_kenya': 'ke', 'soccer_tanzania': 'tz', 'soccer_uganda': 'ug', 'soccer_ethiopia': 'et',
+        'soccer_cameroon': 'cm', 'soccer_senegal': 'sn', 'soccer_mali': 'ml', 'soccer_ivory': 'ci',
+        'soccer_algeria': 'dz', 'soccer_tunisia': 'tn', 'soccer_libya': 'ly', 'soccer_sudan': 'sd',
+        'soccer_zimbabwe': 'zw', 'soccer_zambia': 'zm', 'soccer_mozambique': 'mz', 'soccer_angola': 'ao',
+        'soccer_botswana': 'bw', 'soccer_namibia': 'na', 'soccer_malawi': 'mw', 'soccer_madagascar': 'mg',
+        'soccer_mauritius': 'mu', 'soccer_seychelles': 'sc', 'soccer_comoros': 'km', 'soccer_cape': 'cv',
+        'soccer_guinea': 'gn', 'soccer_guineabissau': 'gw', 'soccer_gambia': 'gm', 'soccer_liberia': 'lr',
+        'soccer_sierra': 'sl', 'soccer_benin': 'bj', 'soccer_togo': 'tg', 'soccer_burkina': 'bf',
+        'soccer_niger': 'ne', 'soccer_chad': 'td', 'soccer_centralafrican': 'cf', 'soccer_congo': 'cg',
+        'soccer_drc': 'cd', 'soccer_gabon': 'ga', 'soccer_equatorial': 'gq', 'soccer_sao': 'st',
+        'soccer_rwanda': 'rw', 'soccer_burundi': 'bi', 'soccer_djibouti': 'dj', 'soccer_eritrea': 'er',
+        'soccer_somalia': 'so', 'soccer_southsudan': 'ss', 'basketball_nba': 'us', 'basketball_euroleague': 'eu',
+        'basketball_spain': 'es', 'basketball_italy': 'it', 'basketball_germany': 'de', 'basketball_france': 'fr',
+        'basketball_turkey': 'tr', 'basketball_greece': 'gr', 'basketball_russia': 'ru', 'basketball_australia': 'au',
+        'basketball_china': 'cn', 'tennis_atp': 'gb-eng', 'tennis_wta': 'gb-eng', 'mma_ufc': 'us',
+        'mma_bellator': 'us', 'mma_one': 'sg', 'icehockey_nhl': 'us', 'icehockey_khl': 'ru',
+        'icehockey_sweden': 'se', 'icehockey_finland': 'fi', 'icehockey_czech': 'cz', 'icehockey_switzerland': 'ch',
+        'icehockey_germany': 'de', 'baseball_mlb': 'us', 'baseball_japan': 'jp', 'baseball_korea': 'kr',
+        'americanfootball_nfl': 'us', 'americanfootball_ncaaf': 'us', 'rugby_six': 'gb-eng', 'rugby_world': 'gb-eng',
+        'cricket_ipl': 'in', 'cricket_bbl': 'au', 'cricket_psl': 'pk', 'cricket_cpl': 'west',
+        'volleyball_italy': 'it', 'volleyball_brazil': 'br', 'volleyball_russia': 'ru', 'volleyball_poland': 'pl',
+        'golf_pga': 'us', 'golf_european': 'eu', 'golf_liv': 'sa', 'boxing_wbc': 'mx', 'boxing_wba': 'us',
+        'boxing_ibf': 'us', 'boxing_wbo': 'pr', 'motorsports_f1': 'gb-eng', 'motorsports_motogp': 'it',
+        'motorsports_nascar': 'us', 'cycling_tour': 'fr', 'cycling_giro': 'it', 'cycling_vuelta': 'es',
+        'darts_pdc': 'gb-eng', 'snooker_world': 'gb-eng', 'handball_germany': 'de', 'handball_spain': 'es',
+        'handball_france': 'fr', 'handball_denmark': 'dk', 'waterpolo_italy': 'it', 'waterpolo_spain': 'es',
+        'futsal_spain': 'es', 'futsal_portugal': 'pt', 'aussierules_afl': 'au', 'floorball_sweden': 'se',
+        'floorball_finland': 'fi', 'floorball_switzerland': 'ch'
+    };
+    for (const [prefix, code] of Object.entries(map)) {
+        if (sportKey.toLowerCase().startsWith(prefix)) return code;
+    }
+    // Extract any 2-letter country code if present
+    const parts = sportKey.split('_');
+    for (const p of parts) {
+        if (p.length === 2 && /^[a-z]{2}$/.test(p)) return p;
+    }
+    return 'gb-eng';
+}
+
+function getTeamFlagUrl(teamName, countryCode) {
+    // Use country flag as base, with team initials overlay concept via ui-avatars for team-specific look
+    const cc = countryCode || 'gb-eng';
+    const encoded = encodeURIComponent(teamName || 'Team');
+    return {
+        flag: `https://flagcdn.com/w40/${cc}.png`,
+        logo: `https://ui-avatars.com/api/?name=${encoded}&background=2563eb&color=fff&size=128&bold=true&font-size=0.4`,
+        svg: `https://flagcdn.com/${cc}.svg`
+    };
+}
+
+function enrichMatchWithFlags(matchObj) {
+    const cc = matchObj.country || getCountryCodeFromSportKey(matchObj.sport_key || matchObj.sport || 'soccer');
+    const home = matchObj.homeTeam || matchObj.home || 'Home';
+    const away = matchObj.awayTeam || matchObj.away || 'Away';
+    const homeFlags = getTeamFlagUrl(home, cc);
+    const awayFlags = getTeamFlagUrl(away, cc);
+    matchObj.homeFlag = homeFlags.flag;
+    matchObj.awayFlag = awayFlags.flag;
+    matchObj.homeLogo = homeFlags.logo;
+    matchObj.awayLogo = awayFlags.logo;
+    matchObj.leagueFlag = `https://flagcdn.com/w40/${cc}.png`;
+    matchObj.country = cc;
+    return matchObj;
+}
+
+function getMatchTimeStr(startTimeStr) {
        if (!startTimeStr) return "";
        const elapsedMs = new Date().getTime() - new Date(startTimeStr).getTime();
        const elapsedMins = Math.floor(elapsedMs / 60000);
@@ -336,6 +415,98 @@
       SPORTS, COMPETITIONS & MATCHES
       ========================================================= */
    app.get('/api/sports', async (req, res) => {
+       try {
+           const response = await axios.get(`https://parlay-api.com/v4/sports?apiKey=${PARLAY_API_KEY}`, { timeout: 8000 });
+           if (response.data && Array.isArray(response.data)) {
+               const iconMap = {
+                   soccer: 'fa-futbol', basketball: 'fa-basketball', tennis: 'fa-table-tennis-paddle-ball',
+                   mma: 'fa-hand-fist', cricket: 'fa-baseball-bat-ball', rugby: 'fa-football',
+                   baseball: 'fa-baseball', icehockey: 'fa-hockey-puck', volleyball: 'fa-volleyball',
+                   esports: 'fa-gamepad', americanfootball: 'fa-football', golf: 'fa-golf-ball-tee',
+                   boxing: 'fa-hand-fist', motorsports: 'fa-flag-checkered', cycling: 'fa-bicycle',
+                   darts: 'fa-bullseye', snooker: 'fa-circle', handball: 'fa-hand-spock',
+                   waterpolo: 'fa-water', futsal: 'fa-futbol', aussierules: 'fa-football',
+                   floorball: 'fa-hockey-puck', bandy: 'fa-hockey-puck', biathlon: 'fa-person-skiing',
+                   skiing: 'fa-person-skiing', formula1: 'fa-flag-checkered', nascar: 'fa-flag-checkered',
+                   rugbyunion: 'fa-football', rugbyleague: 'fa-football', fieldhockey: 'fa-hockey-puck',
+                   lacrosse: 'fa-baseball', softball: 'fa-baseball', netball: 'fa-volleyball',
+                   pesapallo: 'fa-baseball-bat-ball', surfing: 'fa-water', sailing: 'fa-sailboat',
+                   rowing: 'fa-water', canoeing: 'fa-water', triathlon: 'fa-person-swimming',
+                   tabletennis: 'fa-table-tennis-paddle-ball', badminton: 'fa-feather', squash: 'fa-circle',
+                   racquetball: 'fa-circle', polo: 'fa-horse', chess: 'fa-chess-knight',
+                   archery: 'fa-bullseye', shooting: 'fa-crosshairs', weightlifting: 'fa-dumbbell',
+                   gymnastics: 'fa-person-falling', athletics: 'fa-person-running', swimming: 'fa-person-swimming',
+                   diving: 'fa-water', equestrian: 'fa-horse', fencing: 'fa-khanda', judo: 'fa-hand-fist',
+                   taekwondo: 'fa-hand-fist', karate: 'fa-hand-fist', wrestling: 'fa-hand-fist',
+                   kickboxing: 'fa-hand-fist', muaythai: 'fa-hand-fist', sumo: 'fa-hand-fist',
+                   brazilianjiujitsu: 'fa-hand-fist', parkour: 'fa-person-running', climbing: 'fa-mountain',
+                   skateboarding: 'fa-person-skating', snowboarding: 'fa-person-skiing', curling: 'fa-circle',
+                   bobsleigh: 'fa-sleigh', luge: 'fa-sleigh', skeleton: 'fa-skull', skijumping: 'fa-person-skiing',
+                   alpine: 'fa-person-skiing', crosscountry: 'fa-person-skiing', freestyle: 'fa-person-skiing',
+                   nordiccombined: 'fa-person-skiing', shorttrack: 'fa-person-skating', speedskating: 'fa-person-skating',
+                   figure: 'fa-person-skating', synchronizedswimming: 'fa-person-swimming', marathon: 'fa-person-running',
+                   race: 'fa-flag-checkered', horseracing: 'fa-horse', dogracing: 'fa-dog', camelracing: 'fa-hippo',
+                   greyhound: 'fa-dog', harness: 'fa-horse', trotting: 'fa-horse', endurance: 'fa-horse',
+                   rally: 'fa-car', motogp: 'fa-motorcycle', superbike: 'fa-motorcycle', motocross: 'fa-motorcycle',
+                   atv: 'fa-truck-monster', truck: 'fa-truck', tractor: 'fa-tractor', drifter: 'fa-car',
+                   drag: 'fa-car', karting: 'fa-car', speedway: 'fa-motorcycle', grasstrack: 'fa-motorcycle',
+                   ice_racing: 'fa-car', snowmobile: 'fa-sleigh', jetboat: 'fa-ship', powerboat: 'fa-ship',
+                   yachting: 'fa-sailboat', windsurfing: 'fa-water', kitesurfing: 'fa-wind', wakeboarding: 'fa-water',
+                   waterskiing: 'fa-water', paddleboarding: 'fa-water', kayaking: 'fa-water', rafting: 'fa-water',
+                   fishing: 'fa-fish', hunting: 'fa-paw', shooting_sports: 'fa-crosshairs', billiards: 'fa-circle',
+                   pool: 'fa-circle', carrom: 'fa-circle', bocce: 'fa-circle', petanque: 'fa-circle',
+                   boules: 'fa-circle', croquet: 'fa-circle', shuffleboard: 'fa-circle', horseshoes: 'fa-circle',
+                   discgolf: 'fa-circle', ultimate: 'fa-flying-disc', kabaddi: 'fa-hand-fist', sepaktakraw: 'fa-futbol',
+                   wushu: 'fa-hand-fist', sambo: 'fa-hand-fist', pankration: 'fa-hand-fist', bareknuckle: 'fa-hand-fist',
+                   lethwei: 'fa-hand-fist', lethwei: 'fa-hand-fist', lethwei: 'fa-hand-fist'
+               };
+               const colorMap = {
+                   soccer: '#3b82f6', basketball: '#f97316', tennis: '#22c55e', mma: '#6b7280', cricket: '#ef4444',
+                   rugby: '#8b5cf6', baseball: '#eab308', icehockey: '#06b6d4', volleyball: '#ec4899', esports: '#a855f7',
+                   americanfootball: '#f97316', golf: '#22c55e', boxing: '#ef4444', motorsports: '#f97316', cycling: '#22c55e',
+                   darts: '#ef4444', snooker: '#22c55e', handball: '#f97316', waterpolo: '#06b6d4', futsal: '#3b82f6',
+                   aussierules: '#eab308', floorball: '#06b6d4', bandy: '#06b6d4', biathlon: '#22c55e', skiing: '#22c55e',
+                   formula1: '#ef4444', nascar: '#ef4444', rugbyunion: '#8b5cf6', rugbyleague: '#8b5cf6', fieldhockey: '#06b6d4',
+                   lacrosse: '#eab308', softball: '#eab308', netball: '#ec4899', pesapallo: '#ef4444', surfing: '#06b6d4',
+                   sailing: '#06b6d4', rowing: '#06b6d4', canoeing: '#06b6d4', triathlon: '#22c55e', tabletennis: '#22c55e',
+                   badminton: '#22c55e', squash: '#22c55e', racquetball: '#22c55e', polo: '#eab308', chess: '#a855f7',
+                   archery: '#ef4444', shooting: '#ef4444', weightlifting: '#6b7280', gymnastics: '#ec4899', athletics: '#f97316',
+                   swimming: '#06b6d4', diving: '#06b6d4', equestrian: '#eab308', fencing: '#a855f7', judo: '#6b7280',
+                   taekwondo: '#6b7280', karate: '#6b7280', wrestling: '#6b7280', kickboxing: '#ef4444', muaythai: '#ef4444',
+                   sumo: '#6b7280', brazilianjiujitsu: '#6b7280', parkour: '#f97316', climbing: '#22c55e', skateboarding: '#ec4899',
+                   snowboarding: '#22c55e', curling: '#06b6d4', bobsleigh: '#06b6d4', luge: '#06b6d4', skeleton: '#a855f7',
+                   skijumping: '#22c55e', alpine: '#22c55e', crosscountry: '#22c55e', freestyle: '#22c55e', nordiccombined: '#22c55e',
+                   shorttrack: '#06b6d4', speedskating: '#06b6d4', figure: '#ec4899', synchronizedswimming: '#06b6d4', marathon: '#f97316',
+                   race: '#ef4444', horseracing: '#eab308', dogracing: '#a855f7', camelracing: '#eab308', greyhound: '#a855f7',
+                   harness: '#eab308', trotting: '#eab308', endurance: '#eab308', rally: '#ef4444', motogp: '#ef4444',
+                   superbike: '#ef4444', motocross: '#ef4444', atv: '#f97316', truck: '#f97316', tractor: '#f97316',
+                   drifter: '#ef4444', drag: '#ef4444', karting: '#ef4444', speedway: '#ef4444', grasstrack: '#ef4444',
+                   ice_racing: '#06b6d4', snowmobile: '#06b6d4', jetboat: '#06b6d4', powerboat: '#06b6d4', yachting: '#06b6d4',
+                   windsurfing: '#06b6d4', kitesurfing: '#06b6d4', wakeboarding: '#06b6d4', waterskiing: '#06b6d4',
+                   paddleboarding: '#06b6d4', kayaking: '#06b6d4', rafting: '#06b6d4', fishing: '#22c55e', hunting: '#22c55e',
+                   shooting_sports: '#ef4444', billiards: '#22c55e', pool: '#22c55e', carrom: '#22c55e', bocce: '#22c55e',
+                   petanque: '#22c55e', boules: '#22c55e', croquet: '#22c55e', shuffleboard: '#22c55e', horseshoes: '#22c55e',
+                   discgolf: '#22c55e', ultimate: '#22c55e', kabaddi: '#ef4444', sepaktakraw: '#3b82f6', wushu: '#ef4444',
+                   sambo: '#ef4444', pankration: '#ef4444', bareknuckle: '#ef4444', lethwei: '#ef4444'
+               };
+               const mapped = response.data.map(s => {
+                   const key = s.key || s.id || s.sport_key || s.code || 'unknown';
+                   const baseKey = key.split('_')[0];
+                   return {
+                       id: baseKey,
+                       name: s.title || s.name || s.label || key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+                       icon: iconMap[baseKey] || 'fa-trophy',
+                       color: colorMap[baseKey] || '#2563eb',
+                       key: key
+                   };
+               });
+               // Deduplicate by id
+               const seen = new Set();
+               const deduped = mapped.filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; });
+               return res.json({ success: true, sports: deduped.slice(0, 50), source: 'parlay-api', total: deduped.length });
+           }
+       } catch (e) {}
+       // Fallback: expanded hardcoded list (25+ sports)
        const sports = [
            { id: 'soccer', name: 'Football', icon: 'fa-futbol', color: '#3b82f6' },
            { id: 'basketball', name: 'Basketball', icon: 'fa-basketball', color: '#f97316' },
@@ -344,27 +515,80 @@
            { id: 'cricket', name: 'Cricket', icon: 'fa-baseball-bat-ball', color: '#ef4444' },
            { id: 'rugby', name: 'Rugby', icon: 'fa-football', color: '#8b5cf6' },
            { id: 'baseball', name: 'Baseball', icon: 'fa-baseball', color: '#eab308' },
-           { id: 'hockey', name: 'Ice Hockey', icon: 'fa-hockey-puck', color: '#06b6d4' },
+           { id: 'icehockey', name: 'Ice Hockey', icon: 'fa-hockey-puck', color: '#06b6d4' },
            { id: 'volleyball', name: 'Volleyball', icon: 'fa-volleyball', color: '#ec4899' },
-           { id: 'esports', name: 'Esports', icon: 'fa-gamepad', color: '#a855f7' }
+           { id: 'esports', name: 'Esports', icon: 'fa-gamepad', color: '#a855f7' },
+           { id: 'americanfootball', name: 'American Football', icon: 'fa-football', color: '#f97316' },
+           { id: 'golf', name: 'Golf', icon: 'fa-golf-ball-tee', color: '#22c55e' },
+           { id: 'boxing', name: 'Boxing', icon: 'fa-hand-fist', color: '#ef4444' },
+           { id: 'motorsports', name: 'Motorsports', icon: 'fa-flag-checkered', color: '#f97316' },
+           { id: 'cycling', name: 'Cycling', icon: 'fa-bicycle', color: '#22c55e' },
+           { id: 'darts', name: 'Darts', icon: 'fa-bullseye', color: '#ef4444' },
+           { id: 'snooker', name: 'Snooker', icon: 'fa-circle', color: '#22c55e' },
+           { id: 'handball', name: 'Handball', icon: 'fa-hand-spock', color: '#f97316' },
+           { id: 'waterpolo', name: 'Water Polo', icon: 'fa-water', color: '#06b6d4' },
+           { id: 'futsal', name: 'Futsal', icon: 'fa-futbol', color: '#3b82f6' },
+           { id: 'aussierules', name: 'Aussie Rules', icon: 'fa-football', color: '#eab308' },
+           { id: 'floorball', name: 'Floorball', icon: 'fa-hockey-puck', color: '#06b6d4' },
+           { id: 'formula1', name: 'Formula 1', icon: 'fa-flag-checkered', color: '#ef4444' },
+           { id: 'tabletennis', name: 'Table Tennis', icon: 'fa-table-tennis-paddle-ball', color: '#22c55e' },
+           { id: 'badminton', name: 'Badminton', icon: 'fa-feather', color: '#22c55e' },
+           { id: 'athletics', name: 'Athletics', icon: 'fa-person-running', color: '#f97316' },
+           { id: 'swimming', name: 'Swimming', icon: 'fa-person-swimming', color: '#06b6d4' },
+           { id: 'horseracing', name: 'Horse Racing', icon: 'fa-horse', color: '#eab308' },
+           { id: 'wrestling', name: 'Wrestling', icon: 'fa-hand-fist', color: '#6b7280' },
+           { id: 'kabaddi', name: 'Kabaddi', icon: 'fa-hand-fist', color: '#ef4444' }
        ];
-       res.json({ success: true, sports });
+       res.json({ success: true, sports, source: 'fallback', total: sports.length });
    });
    
    app.get('/api/competitions', async (req, res) => {
+       try {
+           const response = await axios.get(`https://parlay-api.com/v4/sports?apiKey=${PARLAY_API_KEY}`, { timeout: 8000 });
+           if (response.data && Array.isArray(response.data)) {
+               const comps = [];
+               const seen = new Set();
+               for (const s of response.data) {
+                   const key = s.key || s.id || '';
+                   const title = s.title || s.name || '';
+                   if (!title || seen.has(title)) continue;
+                   seen.add(title);
+                   const cc = getCountryCodeFromSportKey(key);
+                   comps.push({
+                       name: title,
+                       flag: `https://flagcdn.com/w20/${cc}.png`,
+                       league: title,
+                       country: cc,
+                       sport_key: key
+                   });
+               }
+               if (comps.length >= 10) return res.json({ success: true, competitions: comps.slice(0, 20), source: 'parlay-api' });
+           }
+       } catch (e) {}
+       // Fallback
        const competitions = [
            { name: 'Premier League', flag: 'https://flagcdn.com/w20/gb-eng.png', league: 'Premier League', country: 'gb-eng' },
            { name: 'La Liga', flag: 'https://flagcdn.com/w20/es.png', league: 'La Liga', country: 'es' },
            { name: 'NBA', flag: 'https://flagcdn.com/w20/us.png', league: 'NBA', country: 'us' },
-           { name: 'Champions League', flag: '🏆', league: 'UEFA Champions League', country: 'gb-eng', special: true },
+           { name: 'Champions League', flag: 'https://flagcdn.com/w20/eu.png', league: 'UEFA Champions League', country: 'eu' },
            { name: 'Bundesliga', flag: 'https://flagcdn.com/w20/de.png', league: 'Bundesliga', country: 'de' },
            { name: 'Serie A', flag: 'https://flagcdn.com/w20/it.png', league: 'Serie A', country: 'it' },
            { name: 'Ligue 1', flag: 'https://flagcdn.com/w20/fr.png', league: 'Ligue 1', country: 'fr' },
            { name: 'Europa League', flag: 'https://flagcdn.com/w20/eu.png', league: 'Europa League', country: 'eu' },
            { name: 'NFL', flag: 'https://flagcdn.com/w20/us.png', league: 'NFL', country: 'us' },
-           { name: 'ATP Tour', flag: '🎾', league: 'ATP Tour', country: 'gb-eng' }
+           { name: 'ATP Tour', flag: 'https://flagcdn.com/w20/gb-eng.png', league: 'ATP Tour', country: 'gb-eng' },
+           { name: 'La Liga 2', flag: 'https://flagcdn.com/w20/es.png', league: 'Segunda División', country: 'es' },
+           { name: 'Serie B', flag: 'https://flagcdn.com/w20/it.png', league: 'Serie B', country: 'it' },
+           { name: 'Bundesliga 2', flag: 'https://flagcdn.com/w20/de.png', league: '2. Bundesliga', country: 'de' },
+           { name: 'Ligue 2', flag: 'https://flagcdn.com/w20/fr.png', league: 'Ligue 2', country: 'fr' },
+           { name: 'Eredivisie', flag: 'https://flagcdn.com/w20/nl.png', league: 'Eredivisie', country: 'nl' },
+           { name: 'Primeira Liga', flag: 'https://flagcdn.com/w20/pt.png', league: 'Primeira Liga', country: 'pt' },
+           { name: 'Belgian Pro', flag: 'https://flagcdn.com/w20/be.png', league: 'Belgian Pro League', country: 'be' },
+           { name: 'Scottish Prem', flag: 'https://flagcdn.com/w20/gb-sct.png', league: 'Scottish Premiership', country: 'gb-sct' },
+           { name: 'Turkish Süper', flag: 'https://flagcdn.com/w20/tr.png', league: 'Süper Lig', country: 'tr' },
+           { name: 'Russian Prem', flag: 'https://flagcdn.com/w20/ru.png', league: 'Russian Premier League', country: 'ru' }
        ];
-       res.json({ success: true, competitions });
+       res.json({ success: true, competitions, source: 'fallback' });
    });
    
    app.get('/api/matches', async (req, res, next) => {
@@ -379,7 +603,7 @@
            if (search) { query.$or = [{ homeTeam: { $regex: search, $options: 'i' } }, { awayTeam: { $regex: search, $options: 'i' } }, { league: { $regex: search, $options: 'i' } }]; }
    
            const matches = await Match.find(query).sort({ startTime: 1 }).limit(parseInt(limit)).skip((parseInt(page) - 1) * parseInt(limit));
-           const formatted = matches.map(m => {
+           let formatted = matches.map(m => {
                const obj = m.toObject();
                if (m.status === 'live' && m.startTime) {
                    obj.score = getDeterministicScore(m._id.toString(), m.startTime.toISOString(), m.result);
@@ -389,6 +613,7 @@
                obj.id = m._id.toString();
                return obj;
            });
+           formatted = formatted.map(m => enrichMatchWithFlags(m));
            res.json({ success: true, matches: formatted, page: parseInt(page), total: await Match.countDocuments(query) });
        } catch (err) { next(err); }
    });
@@ -396,11 +621,12 @@
    app.get('/api/matches/featured', async (req, res, next) => {
        try {
            const matches = await Match.find({ featured: true, status: { $in: ['upcoming', 'live'] } }).limit(10).sort({ startTime: 1 });
-           const formatted = matches.map(m => {
+           let formatted = matches.map(m => {
                const obj = m.toObject(); obj.id = m._id.toString();
                if (m.status === 'live' && m.startTime) { obj.score = getDeterministicScore(m._id.toString(), m.startTime.toISOString(), m.result); obj.time = getMatchTimeStr(m.startTime.toISOString()); obj.isLive = true; }
                return obj;
            });
+           formatted = formatted.map(m => enrichMatchWithFlags(m));
            res.json({ success: true, matches: formatted });
        } catch (err) { next(err); }
    });
@@ -453,7 +679,8 @@
                return { id: 'api_'+m.id, sport: sp, region: 'Global', league: m.sport_title||'League', country: cc, home: m.home_team, away: m.away_team, isLive: false, isFeatured: Math.random()>0.7, startTime: md.toISOString(), score: null, odds: [h,d,a], marketCount: Math.floor(Math.random()*150)+30, gradeScore: sp==='soccer'?80:50, status: 'upcoming', result: null, finalScore: null };
            }).filter(Boolean);
    
-           const combined = [...dbMatches, ...apiMatches].sort((a,b) => (b.gradeScore||0) - (a.gradeScore||0));
+           let combined = [...dbMatches, ...apiMatches].sort((a,b) => (b.gradeScore||0) - (a.gradeScore||0));
+           combined = combined.map(m => enrichMatchWithFlags(m));
            res.json({ success: true, matches: combined.slice(0,500) });
        } catch (err) { res.status(500).json({ error: "Fetch failed." }); }
    });
@@ -667,7 +894,17 @@
        } catch (err) { res.status(500).send(); }
    });
    
-   app.get('/api/admin/matches', verifyAdminToken, async (req, res) => { try { res.json(await Match.find().sort({ startTime: -1 }).limit(500)); } catch (err) { res.status(500).send(); } });
+   app.get('/api/admin/matches', verifyAdminToken, async (req, res) => {
+       try {
+           const matches = await Match.find().sort({ startTime: -1 }).limit(500);
+           const enriched = matches.map(m => {
+               const obj = m.toObject();
+               obj.id = m._id.toString();
+               return enrichMatchWithFlags(obj);
+           });
+           res.json(enriched);
+       } catch (err) { res.status(500).send(); }
+   });
    
    app.post('/api/admin/matches', verifyAdminToken, async (req, res) => {
        try {
