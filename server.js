@@ -21,7 +21,7 @@
    const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/betwinn';
    const API_URL = process.env.NODE_ENV === 'production' ? 'https://api.betwinn.co.ke/api' : `http://localhost:${PORT}/api`;
    const PARLAY_API_KEY = process.env.PARLAY_API_KEY || '627778f98df49b4c7d459b1760997abd';
-   const ODDS_API_KEY = process.env.ODDS_API_KEY || '581547add320d504f22fd7454a1140df';
+   const ODDS_API_KEY = process.env.ODDS_API_KEY || 'e74fb850fc80d42a467adf602d6e0e0b';
    
    /* =========================================================
       CUSTOM MONGO SANITIZE
@@ -416,7 +416,7 @@ function getMatchTimeStr(startTimeStr) {
       ========================================================= */
    app.get('/api/sports', async (req, res) => {
        try {
-           const response = await axios.get(`https://parlay-api.com/v4/sports?apiKey=${PARLAY_API_KEY}`, { timeout: 8000 });
+           const response = await axios.get('https://api.the-odds-api.com/v4/sports/', { params: { apiKey: ODDS_API_KEY }, timeout: 8000 });
            if (response.data && Array.isArray(response.data)) {
                const iconMap = {
                    soccer: 'fa-futbol', basketball: 'fa-basketball', tennis: 'fa-table-tennis-paddle-ball',
@@ -458,7 +458,7 @@ function getMatchTimeStr(startTimeStr) {
                    boules: 'fa-circle', croquet: 'fa-circle', shuffleboard: 'fa-circle', horseshoes: 'fa-circle',
                    discgolf: 'fa-circle', ultimate: 'fa-flying-disc', kabaddi: 'fa-hand-fist', sepaktakraw: 'fa-futbol',
                    wushu: 'fa-hand-fist', sambo: 'fa-hand-fist', pankration: 'fa-hand-fist', bareknuckle: 'fa-hand-fist',
-                   lethwei: 'fa-hand-fist', lethwei: 'fa-hand-fist', lethwei: 'fa-hand-fist'
+                   lethwei: 'fa-hand-fist'
                };
                const colorMap = {
                    soccer: '#3b82f6', basketball: '#f97316', tennis: '#22c55e', mma: '#6b7280', cricket: '#ef4444',
@@ -489,24 +489,24 @@ function getMatchTimeStr(startTimeStr) {
                    discgolf: '#22c55e', ultimate: '#22c55e', kabaddi: '#ef4444', sepaktakraw: '#3b82f6', wushu: '#ef4444',
                    sambo: '#ef4444', pankration: '#ef4444', bareknuckle: '#ef4444', lethwei: '#ef4444'
                };
-               const mapped = response.data.map(s => {
-                   const key = s.key || s.id || s.sport_key || s.code || 'unknown';
+               const mapped = response.data.filter(s => s.active).map(s => {
+                   const key = s.key || 'unknown';
                    const baseKey = key.split('_')[0];
                    return {
                        id: baseKey,
-                       name: s.title || s.name || s.label || key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+                       name: s.title || s.group || key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
                        icon: iconMap[baseKey] || 'fa-trophy',
                        color: colorMap[baseKey] || '#2563eb',
-                       key: key
+                       key: key,
+                       group: s.group || 'Other',
+                       hasOutrights: s.has_outrights || false
                    };
                });
-               // Deduplicate by id
                const seen = new Set();
                const deduped = mapped.filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; });
-               return res.json({ success: true, sports: deduped.slice(0, 50), source: 'parlay-api', total: deduped.length });
+               return res.json({ success: true, sports: deduped.slice(0, 50), source: 'the-odds-api', total: deduped.length });
            }
        } catch (e) {}
-       // Fallback: expanded hardcoded list (25+ sports)
        const sports = [
            { id: 'soccer', name: 'Football', icon: 'fa-futbol', color: '#3b82f6' },
            { id: 'basketball', name: 'Basketball', icon: 'fa-basketball', color: '#f97316' },
@@ -544,13 +544,13 @@ function getMatchTimeStr(startTimeStr) {
    
    app.get('/api/competitions', async (req, res) => {
        try {
-           const response = await axios.get(`https://parlay-api.com/v4/sports?apiKey=${PARLAY_API_KEY}`, { timeout: 8000 });
+           const response = await axios.get('https://api.the-odds-api.com/v4/sports/', { params: { apiKey: ODDS_API_KEY }, timeout: 8000 });
            if (response.data && Array.isArray(response.data)) {
                const comps = [];
                const seen = new Set();
-               for (const s of response.data) {
-                   const key = s.key || s.id || '';
-                   const title = s.title || s.name || '';
+               for (const s of response.data.filter(x => x.active)) {
+                   const key = s.key || '';
+                   const title = s.title || s.group || '';
                    if (!title || seen.has(title)) continue;
                    seen.add(title);
                    const cc = getCountryCodeFromSportKey(key);
@@ -562,10 +562,9 @@ function getMatchTimeStr(startTimeStr) {
                        sport_key: key
                    });
                }
-               if (comps.length >= 10) return res.json({ success: true, competitions: comps.slice(0, 20), source: 'parlay-api' });
+               if (comps.length >= 10) return res.json({ success: true, competitions: comps.slice(0, 20), source: 'the-odds-api' });
            }
        } catch (e) {}
-       // Fallback
        const competitions = [
            { name: 'Premier League', flag: 'https://flagcdn.com/w20/gb-eng.png', league: 'Premier League', country: 'gb-eng' },
            { name: 'La Liga', flag: 'https://flagcdn.com/w20/es.png', league: 'La Liga', country: 'es' },
@@ -651,8 +650,8 @@ function getMatchTimeStr(startTimeStr) {
            let allApi = [];
            await Promise.all(sportsToFetch.map(async (sk) => {
                try {
-                   const r = await axios.get(`https://parlay-api.com/v1/sports/${sk}/odds?apiKey=${ODDS_API_KEY}&regions=uk,eu,us&markets=h2h&commenceTimeFrom=${fromDate}&commenceTimeTo=${toDate}`, { timeout: 8000 });
-                   if (r.data) allApi = allApi.concat(r.data);
+                   const r = await axios.get(`https://api.the-odds-api.com/v4/sports/${sk}/odds/`, { params: { apiKey: ODDS_API_KEY, regions: 'eu,uk', markets: 'h2h', oddsFormat: 'decimal' }, timeout: 8000 });
+                   if (r.data && Array.isArray(r.data)) allApi = allApi.concat(r.data);
                } catch(e){}
            }));
    
@@ -1029,42 +1028,78 @@ function getMatchTimeStr(startTimeStr) {
       ========================================================= */
    async function fetchAndCacheLiveOdds() {
        try {
-           console.log("🔄 Fetching odds from parlay-api.com...");
-           const sportsToFetch = ['soccer_epl','soccer_uefa_champs_league','soccer_spain_la_liga','soccer_italy_serie_a','basketball_nba','tennis_atp','mma_mixed_martial_arts'];
+           console.log("🔄 Fetching odds from the-odds-api.com...");
+           const sportsToFetch = [
+               'soccer_epl','soccer_uefa_champs_league','soccer_spain_la_liga','soccer_italy_serie_a',
+               'soccer_germany_bundesliga','soccer_france_ligue_one','basketball_nba','tennis_atp',
+               'icehockey_nhl','mma_mixed_martial_arts','americanfootball_nfl','baseball_mlb'
+           ];
            let allApiMatches = [];
            for (const sport of sportsToFetch) {
                try {
-                   const response = await axios.get(`https://parlay-api.com/v4/sports/${sport}/odds?apiKey=${PARLAY_API_KEY}&regions=us,eu,uk&markets=h2h,spreads`);
+                   const response = await axios.get(`https://api.the-odds-api.com/v4/sports/${sport}/odds/`, {
+                       params: { apiKey: ODDS_API_KEY, regions: 'eu,uk', markets: 'h2h', oddsFormat: 'decimal' },
+                       timeout: 15000
+                   });
                    if (response.data && Array.isArray(response.data)) allApiMatches = allApiMatches.concat(response.data);
                } catch (e) { console.error(`❌ Failed sport ${sport}:`, e.response?.data?.message || e.message); }
            }
+           // Also fetch upcoming across all sports
+           try {
+               const upcoming = await axios.get('https://api.the-odds-api.com/v4/sports/upcoming/odds/', {
+                   params: { apiKey: ODDS_API_KEY, regions: 'eu,uk', markets: 'h2h', oddsFormat: 'decimal' },
+                   timeout: 15000
+               });
+               if (upcoming.data && Array.isArray(upcoming.data)) allApiMatches = allApiMatches.concat(upcoming.data);
+           } catch (e) { console.error('❌ Failed upcoming:', e.message); }
+
+           // Deduplicate
+           const uniqueMap = new Map();
+           allApiMatches.forEach(m => { if (!uniqueMap.has(m.id)) uniqueMap.set(m.id, m); });
+           const uniqueMatches = Array.from(uniqueMap.values());
+
            const now = new Date(); let syncedCount = 0;
-           for (const match of allApiMatches) {
+           for (const match of uniqueMatches) {
                const matchDate = new Date(match.commence_time);
-               if (now.getTime() - matchDate.getTime() >= 0) continue;
-               const market = match.bookmakers[0]?.markets[0];
-               let homeOdds = 1.90, drawOdds = null, awayOdds = 1.90;
-               if (market && market.outcomes) {
-                   const homeOutcome = market.outcomes.find(o => o.name === match.home_team);
-                   const awayOutcome = market.outcomes.find(o => o.name === match.away_team);
-                   const drawOutcome = market.outcomes.find(o => o.name === 'Draw' || (o.name !== match.home_team && o.name !== match.away_team));
-                   if (homeOutcome) homeOdds = homeOutcome.price;
-                   if (awayOutcome) awayOdds = awayOutcome.price;
-                   if (drawOutcome) drawOdds = drawOutcome.price;
+               const diffMins = Math.floor((now - matchDate) / 60000);
+               if (diffMins > 120) continue; // Skip finished matches
+
+               let homeOdds = 0, drawOdds = 0, awayOdds = 0;
+               if (match.bookmakers && match.bookmakers.length > 0) {
+                   const h2h = match.bookmakers[0].markets?.find(mk => mk.key === 'h2h');
+                   if (h2h && h2h.outcomes) {
+                       const outHome = h2h.outcomes.find(o => o.name === match.home_team);
+                       const outAway = h2h.outcomes.find(o => o.name === match.away_team);
+                       const outDraw = h2h.outcomes.find(o => o.name.toLowerCase() === 'draw');
+                       if (outHome) homeOdds = parseFloat(outHome.price);
+                       if (outAway) awayOdds = parseFloat(outAway.price);
+                       if (outDraw) drawOdds = parseFloat(outDraw.price);
+                   }
                }
+               // Skip invalid odds
+               if (homeOdds < 1.05 || awayOdds < 1.05 || homeOdds > 50 || awayOdds > 50) continue;
+               if (match.sport_title.toLowerCase().includes('soccer') && !drawOdds) continue;
+
                let mappedSport = 'soccer';
                if (match.sport_key.includes('basketball')) mappedSport = 'basketball';
                if (match.sport_key.includes('tennis')) mappedSport = 'tennis';
                if (match.sport_key.includes('mma')) mappedSport = 'mma';
+               if (match.sport_key.includes('icehockey')) mappedSport = 'hockey';
+               if (match.sport_key.includes('americanfootball')) mappedSport = 'rugby';
+               if (match.sport_key.includes('baseball')) mappedSport = 'baseball';
                if (mappedSport === 'soccer' && !drawOdds) { drawOdds = parseFloat(((homeOdds + awayOdds) / 1.6).toFixed(2)); if (drawOdds < 2.5) drawOdds = 3.10; }
+
+               const cc = getCountryCodeFromSportKey(match.sport_key);
+               const status = diffMins >= 0 && diffMins <= 115 ? 'live' : 'upcoming';
+
                await Match.findOneAndUpdate(
                    { apiId: match.id },
-                   { apiId: match.id, sport: mappedSport, league: match.sport_title || 'League', homeTeam: match.home_team, awayTeam: match.away_team, startTime: matchDate, isLive: false, odds: { '1': parseFloat(homeOdds)||0, 'X': parseFloat(drawOdds)||0, '2': parseFloat(awayOdds)||0 }, oddsArr: [parseFloat(homeOdds)||0, parseFloat(drawOdds)||0, parseFloat(awayOdds)||0], marketsCount: Math.floor(Math.random()*150)+50, featured: Math.random()>0.8 },
+                   { apiId: match.id, sport: mappedSport, league: match.sport_title || 'League', homeTeam: match.home_team, awayTeam: match.away_team, startTime: matchDate, isLive: status === 'live', status, country: cc, odds: { '1': homeOdds, 'X': drawOdds, '2': awayOdds }, oddsArr: [homeOdds, drawOdds, awayOdds], marketsCount: Math.floor(Math.random()*150)+50, featured: Math.random()>0.8 },
                    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
                );
                syncedCount++;
            }
-           console.log(`✅ Synced ${syncedCount} matches from Parlay API`);
+           console.log(`✅ Synced ${syncedCount} matches from The-Odds-API`);
        } catch (e) { console.error("🔥 Odds Fetch Error:", e.message); }
    }
    
