@@ -1,5 +1,5 @@
 /* =========================================================
-   BETWINN SERVER.JS (Bulletproof Edition)
+   BETWINN SERVER.JS (Parlay API Edition)
    Express + MongoDB + JWT + bcrypt + axios
    ========================================================= */
 
@@ -22,7 +22,9 @@
    const JWT_SECRET = process.env.JWT_SECRET || 'betwinn_secret_key_2026';
    const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/betwinn';
    const API_URL = process.env.NODE_ENV === 'production' ? 'https://api.betwinn.co.ke/api' : `http://localhost:${PORT}/api`;
-   const ODDS_API_KEY = process.env.ODDS_API_KEY || '581547add320d504f22fd7454a1140df';
+   
+   // Updated to use your new Parlay API Key
+   const PARLAY_API_KEY = process.env.PARLAY_API_KEY || '627778f98df49b4c7d459b1760997abd';
    
    /* =========================================================
       MIDDLEWARE
@@ -184,24 +186,28 @@
    /* =========================================================
       SPORTS, MATCHES & MARKETS
       ========================================================= */
-   app.get('/api/sports', async (req, res) => {
-       const sports = [
-           { id: 'soccer', name: 'Football', icon: 'fa-futbol', color: '#3b82f6' },
-           { id: 'basketball', name: 'Basketball', icon: 'fa-basketball', color: '#f97316' },
-           { id: 'tennis', name: 'Tennis', icon: 'fa-table-tennis-paddle-ball', color: '#22c55e' },
-           { id: 'mma', name: 'MMA', icon: 'fa-hand-fist', color: '#6b7280' }
-       ];
-       res.json({ success: true, sports });
+   app.get('/api/sports', async (req, res, next) => {
+       try {
+           const sports = [
+               { id: 'soccer', name: 'Football', icon: 'fa-futbol', color: '#3b82f6' },
+               { id: 'basketball', name: 'Basketball', icon: 'fa-basketball', color: '#f97316' },
+               { id: 'tennis', name: 'Tennis', icon: 'fa-table-tennis-paddle-ball', color: '#22c55e' },
+               { id: 'mma', name: 'MMA', icon: 'fa-hand-fist', color: '#6b7280' }
+           ];
+           res.json({ success: true, sports });
+       } catch (err) { next(err); }
    });
    
-   app.get('/api/competitions', async (req, res) => {
-       const competitions = [
-           { name: 'Premier League', flag: '🏴󠁧󠁢󠁥󠁮󠁧󠁿', league: 'Premier League' },
-           { name: 'La Liga', flag: '🇪🇸', league: 'La Liga' },
-           { name: 'NBA', flag: '🇺🇸', league: 'NBA' },
-           { name: 'Champions League', flag: '🏆', league: 'UEFA Champions League', special: true }
-       ];
-       res.json({ success: true, competitions });
+   app.get('/api/competitions', async (req, res, next) => {
+       try {
+           const competitions = [
+               { name: 'Premier League', flag: '🏴󠁧󠁢󠁥󠁮󠁧󠁿', league: 'Premier League' },
+               { name: 'La Liga', flag: '🇪🇸', league: 'La Liga' },
+               { name: 'NBA', flag: '🇺🇸', league: 'NBA' },
+               { name: 'Champions League', flag: '🏆', league: 'UEFA Champions League', special: true }
+           ];
+           res.json({ success: true, competitions });
+       } catch (err) { next(err); }
    });
    
    app.get('/api/matches', async (req, res, next) => {
@@ -297,11 +303,11 @@
    });
    
    /* =========================================================
-      THE ODDS API BACKGROUND SYNC
+      PARLAY API BACKGROUND SYNC
       ========================================================= */
    async function fetchAndCacheLiveOdds() {
        try {
-           console.log("🔄 Fetching live odds from api.the-odds-api.com...");
+           console.log("🔄 Fetching live odds from parlay-api.com (v4)...");
            const sportsToFetch = [
                'soccer_epl', 'soccer_uefa_champs_league', 'soccer_spain_la_liga', 'soccer_italy_serie_a',
                'basketball_nba', 'tennis_atp', 'mma_mixed_martial_arts'
@@ -311,12 +317,12 @@
            
            for (const sport of sportsToFetch) {
                try {
-                const response = await axios.get(`https://parlay-api.com/v4/sports/${sport}/odds?apiKey=${ODDS_API_KEY}&regions=us,eu,uk&markets=h2h,spreads`);
+                   // Switched to Parlay API
+                   const response = await axios.get(`https://parlay-api.com/v4/sports/${sport}/odds?apiKey=${PARLAY_API_KEY}&regions=us,eu,uk&markets=h2h,spreads`);
                    if (response.data && Array.isArray(response.data)) {
                        allApiMatches = allApiMatches.concat(response.data);
                    }
                } catch (e) {
-                   // Improved Error Logging for the API
                    const apiErrorMsg = e.response?.data?.message || e.message;
                    console.error(`❌ Failed to fetch sport ${sport}:`, apiErrorMsg);
                }
@@ -327,7 +333,7 @@
    
            for (const match of allApiMatches) {
                const matchDate = new Date(match.commence_time);
-               if (now.getTime() - matchDate.getTime() >= 0) continue; // Only process upcoming games
+               if (now.getTime() - matchDate.getTime() >= 0) continue; 
    
                const market = match.bookmakers[0]?.markets[0];
                let homeOdds = 1.90, drawOdds = null, awayOdds = 1.90;
@@ -347,13 +353,11 @@
                if (match.sport_key.includes('tennis')) mappedSport = 'tennis';
                if (match.sport_key.includes('mma') || match.sport_key.includes('ufc')) mappedSport = 'mma';
    
-               // Fake a draw odds for soccer if the API didn't provide one
                if (mappedSport === 'soccer' && !drawOdds) {
                    drawOdds = parseFloat(((homeOdds + awayOdds) / 1.6).toFixed(2));
                    if (drawOdds < 2.5) drawOdds = 3.10;
                }
    
-               // Sync with BetWinn Match Schema
                await Match.findOneAndUpdate(
                    { apiId: match.id },
                    {
@@ -377,7 +381,7 @@
                syncedCount++;
            }
    
-           console.log(`✅ Synced ${syncedCount} upcoming matches from The Odds API to MongoDB`);
+           console.log(`✅ Synced ${syncedCount} upcoming matches from Parlay API to MongoDB`);
        } catch (e) {
            console.error("🔥 Master Odds Fetch Error:", e.message);
        }
@@ -402,7 +406,6 @@
        .then(() => {
            console.log('MongoDB connected');
            
-           // Trigger API sync immediately on startup, then every 30 minutes
            fetchAndCacheLiveOdds();
            setInterval(fetchAndCacheLiveOdds, 30 * 60 * 1000); 
    
