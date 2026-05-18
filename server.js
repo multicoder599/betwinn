@@ -636,7 +636,7 @@ function getMatchTimeStr(startTimeStr) {
    app.get('/api/live-matches', async (req, res) => {
        try {
            const now = new Date();
-           const matches = await Match.find({ status: { $in: ['upcoming', 'live'] } })
+           const matches = await Match.find({ apiId: { $exists: true }, status: { $in: ['upcoming', 'live'] } })
                .sort({ startTime: 1 })
                .limit(500);
 
@@ -1172,6 +1172,10 @@ async function getOddsApiActiveSports() {
            try { await mongoose.connection.collection('bets').dropIndex('bookingCode_1'); console.log('Cleared legacy index.'); } catch(e){}
            fetchAndCacheLiveOdds();
            setInterval(fetchAndCacheLiveOdds, 10 * 60 * 1000);
-           app.listen(PORT, () => { console.log(`BetWinn API running on port ${PORT}`); console.log(`API Base: ${API_URL}`); });
+           app.listen(PORT, () => { 
+           console.log(`BetWinn API running on port ${PORT}`); 
+           console.log(`API Base: ${API_URL}`);
+           console.log('✅ Route registered: GET /api/live-matches');
+       });
        })
        .catch(err => { console.error('MongoDB connection failed:', err); process.exit(1); });
