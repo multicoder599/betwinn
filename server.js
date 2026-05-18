@@ -646,7 +646,7 @@ function getMatchTimeStr(startTimeStr) {
            const fromDate = tomorrow.toISOString().split('.')[0]+'Z';
            const toDate = nextWeek.toISOString().split('.')[0]+'Z';
    
-           const sportsToFetch = ['soccer_epl','soccer_uefa_champs_league','soccer_italy_serie_a','soccer_spain_la_liga','soccer_germany_bundesliga','soccer_france_ligue_one','basketball_nba','tennis_atp','icehockey_nhl','mma_mixed_martial_arts','americanfootball_nfl','baseball_mlb'];
+           const sportsToFetch = ['soccer_epl','soccer_uefa_champs_league','soccer_italy_serie_a','soccer_spain_la_liga','soccer_germany_bundesliga','soccer_france_ligue_one','basketball_nba','icehockey_nhl','mma_mixed_martial_arts','americanfootball_nfl','baseball_mlb'];
            let allApi = [];
            await Promise.all(sportsToFetch.map(async (sk) => {
                try {
@@ -1031,7 +1031,7 @@ function getMatchTimeStr(startTimeStr) {
            console.log("🔄 Fetching odds from the-odds-api.com...");
            const sportsToFetch = [
                'soccer_epl','soccer_uefa_champs_league','soccer_spain_la_liga','soccer_italy_serie_a',
-               'soccer_germany_bundesliga','soccer_france_ligue_one','basketball_nba','tennis_atp',
+               'soccer_germany_bundesliga','soccer_france_ligue_one','basketball_nba',
                'icehockey_nhl','mma_mixed_martial_arts','americanfootball_nfl','baseball_mlb'
            ];
            let allApiMatches = [];
@@ -1042,7 +1042,16 @@ function getMatchTimeStr(startTimeStr) {
                        timeout: 15000
                    });
                    if (response.data && Array.isArray(response.data)) allApiMatches = allApiMatches.concat(response.data);
-               } catch (e) { console.error(`❌ Failed sport ${sport}:`, e.response?.data?.message || e.message); }
+               } catch (e) {
+                   const msg = e.response?.data?.message || e.response?.data || e.message;
+                   if (msg?.includes?.('Unknown sport') || msg?.includes?.('does not exist')) {
+                       console.warn(`⚠️ Skipping ${sport}: not available on The-Odds-API`);
+                   } else if (e.response?.status === 403) {
+                       console.error(`❌ ${sport}: API key invalid or quota exceeded (403)`);
+                   } else {
+                       console.error(`❌ Failed sport ${sport}:`, msg);
+                   }
+               }
            }
            // Also fetch upcoming across all sports
            try {
