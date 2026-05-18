@@ -14,16 +14,12 @@
    const axios = require('axios');
    
    const app = express();
-   
-   // CRITICAL FOR PRODUCTION: Tells Express it is behind a reverse proxy (Nginx). 
    app.set('trust proxy', 1);
    
-   const PORT = process.env.PORT || 3012; 
+   const PORT = process.env.PORT || 3012;
    const JWT_SECRET = process.env.JWT_SECRET || 'betwinn_secret_key_2026';
    const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/betwinn';
    const API_URL = process.env.NODE_ENV === 'production' ? 'https://api.betwinn.co.ke/api' : `http://localhost:${PORT}/api`;
-   
-   // Configured to use your active Parlay API Key
    const PARLAY_API_KEY = process.env.PARLAY_API_KEY || '627778f98df49b4c7d459b1760997abd';
    
    /* =========================================================
@@ -46,21 +42,18 @@
       MIDDLEWARE
       ========================================================= */
    app.use(helmet());
-   
    app.use(cors({
        origin: [
-           'https://betwinn.co.ke', 
+           'https://betwinn.co.ke',
            'https://www.betwinn.co.ke',
-           'http://localhost:3012', 
+           'http://localhost:3012',
            'http://127.0.0.1:3012'
        ],
        methods: ['GET', 'POST', 'PUT', 'DELETE'],
        credentials: true
    }));
-   
    app.use(express.json({ limit: '10mb' }));
    
-   // Custom mongo sanitize middleware (fixes the express-mongo-sanitize crash)
    app.use((req, res, next) => {
        if (req.body) sanitizeObject(req.body);
        if (req.query) sanitizeObject(req.query);
@@ -85,7 +78,6 @@
    /* =========================================================
       DATABASE MODELS
       ========================================================= */
-   
    const userSchema = new mongoose.Schema({
        name: { type: String, required: true },
        email: { type: String, required: true, unique: true, lowercase: true },
@@ -99,7 +91,7 @@
    const User = mongoose.model('User', userSchema);
    
    const matchSchema = new mongoose.Schema({
-       apiId: { type: String, unique: true, sparse: true }, 
+       apiId: { type: String, unique: true, sparse: true },
        league: { type: String, required: true },
        homeTeam: { type: String, required: true },
        awayTeam: { type: String, required: true },
@@ -123,7 +115,7 @@
    const betSchema = new mongoose.Schema({
        userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
        selections: [{
-           matchId: { type: String, required: true }, 
+           matchId: { type: String, required: true },
            pick: { type: String, required: true },
            odd: { type: Number, required: true },
            title: { type: String }
@@ -153,11 +145,9 @@
        try {
            const token = req.headers.authorization?.split(' ')[1];
            if (!token) return res.status(401).json({ success: false, message: 'Access denied. No token provided.' });
-   
            const decoded = jwt.verify(token, JWT_SECRET);
            const user = await User.findById(decoded.id).select('-password');
            if (!user) return res.status(401).json({ success: false, message: 'User not found.' });
-   
            req.user = user;
            next();
        } catch (err) {
@@ -179,14 +169,11 @@
        try {
            const { name, email, phone, password } = req.body;
            if (!name || !phone || !password) return res.status(400).json({ success: false, message: 'Missing fields.' });
-   
            const existingUser = await User.findOne({ $or: [{ phone }, { email }] });
-           if (existingUser) return res.status(400).json({ success: false, message: 'User exists.' });
-   
+           if (existingUser) return res.status(400).json({ success: false, message: 'User already exists with this phone or email.' });
            const hashedPassword = await bcrypt.hash(password, 12);
            const user = new User({ name, email: email || `${phone}@betwinn.co.ke`, phone, password: hashedPassword });
            await user.save();
-   
            const token = jwt.sign({ id: user._id, phone: user.phone }, JWT_SECRET, { expiresIn: '7d' });
            res.status(201).json({ success: true, token, user: { id: user._id, name: user.name, phone: user.phone, balance: user.balance } });
        } catch (err) { next(err); }
@@ -195,9 +182,11 @@
    app.post('/api/auth/login', async (req, res, next) => {
        try {
            const { phone, password } = req.body;
+           if (!phone || !password) return res.status(400).json({ success: false, message: 'Phone and password are required.' });
            const user = await User.findOne({ phone });
-           if (!user || !(await bcrypt.compare(password, user.password))) return res.status(400).json({ success: false, message: 'Invalid credentials.' });
-   
+           if (!user) return res.status(400).json({ success: false, message: 'User not found. Please register first.' });
+           const validPass = await bcrypt.compare(password, user.password);
+           if (!validPass) return res.status(400).json({ success: false, message: 'Incorrect password. Please try again.' });
            const token = jwt.sign({ id: user._id, phone: user.phone }, JWT_SECRET, { expiresIn: '7d' });
            res.json({ success: true, token, user: { id: user._id, name: user.name, phone: user.phone, balance: user.balance } });
        } catch (err) { next(err); }
@@ -210,39 +199,57 @@
    /* =========================================================
       SPORTS, MATCHES & MARKETS
       ========================================================= */
-   app.get('/api/sports', async (req, res, next) => {
-       try {
-           const sports = [
-               { id: 'soccer', name: 'Football', icon: 'fa-futbol', color: '#3b82f6' },
-               { id: 'basketball', name: 'Basketball', icon: 'fa-basketball', color: '#f97316' },
-               { id: 'tennis', name: 'Tennis', icon: 'fa-table-tennis-paddle-ball', color: '#22c55e' },
-               { id: 'mma', name: 'MMA', icon: 'fa-hand-fist', color: '#6b7280' }
-           ];
-           res.json({ success: true, sports });
-       } catch (err) { next(err); }
+   app.get('/api/sports', async (req, res) => {
+       const sports = [
+           { id: 'soccer', name: 'Football', icon: 'fa-futbol', color: '#3b82f6' },
+           { id: 'basketball', name: 'Basketball', icon: 'fa-basketball', color: '#f97316' },
+           { id: 'tennis', name: 'Tennis', icon: 'fa-table-tennis-paddle-ball', color: '#22c55e' },
+           { id: 'mma', name: 'MMA', icon: 'fa-hand-fist', color: '#6b7280' },
+           { id: 'cricket', name: 'Cricket', icon: 'fa-baseball-bat-ball', color: '#ef4444' },
+           { id: 'rugby', name: 'Rugby', icon: 'fa-football', color: '#8b5cf6' },
+           { id: 'baseball', name: 'Baseball', icon: 'fa-baseball', color: '#eab308' },
+           { id: 'hockey', name: 'Ice Hockey', icon: 'fa-hockey-puck', color: '#06b6d4' },
+           { id: 'volleyball', name: 'Volleyball', icon: 'fa-volleyball', color: '#ec4899' },
+           { id: 'esports', name: 'Esports', icon: 'fa-gamepad', color: '#a855f7' }
+       ];
+       res.json({ success: true, sports });
    });
    
-   app.get('/api/competitions', async (req, res, next) => {
-       try {
-           const competitions = [
-               { name: 'Premier League', flag: '🏴󠁧󠁢󠁥󠁮󠁧󠁿', league: 'Premier League' },
-               { name: 'La Liga', flag: '🇪🇸', league: 'La Liga' },
-               { name: 'NBA', flag: '🇺🇸', league: 'NBA' },
-               { name: 'Champions League', flag: '🏆', league: 'UEFA Champions League', special: true }
-           ];
-           res.json({ success: true, competitions });
-       } catch (err) { next(err); }
+   app.get('/api/competitions', async (req, res) => {
+       const competitions = [
+           { name: 'Premier League', flag: '🏴󠁧󠁢󠁥󠁮󠁧󠁿', league: 'Premier League' },
+           { name: 'La Liga', flag: '🇪🇸', league: 'La Liga' },
+           { name: 'NBA', flag: '🇺🇸', league: 'NBA' },
+           { name: 'Champions League', flag: '🏆', league: 'UEFA Champions League', special: true },
+           { name: 'Bundesliga', flag: '🇩🇪', league: 'Bundesliga' },
+           { name: 'Serie A', flag: '🇮🇹', league: 'Serie A' },
+           { name: 'Ligue 1', flag: '🇫🇷', league: 'Ligue 1' },
+           { name: 'Europa League', flag: '🇪🇺', league: 'Europa League' },
+           { name: 'NFL', flag: '🏈', league: 'NFL' },
+           { name: 'ATP Tour', flag: '🎾', league: 'ATP Tour' }
+       ];
+       res.json({ success: true, competitions });
    });
    
    app.get('/api/matches', async (req, res, next) => {
        try {
-           const { sport, league, status, search, page = 1, limit = 50 } = req.query;
+           const { sport, league, status, search, date, page = 1, limit = 50 } = req.query;
            let query = {};
    
            if (sport) query.sport = sport;
            if (league) query.league = { $regex: league, $options: 'i' };
            if (status === 'live') query.isLive = true;
-           
+   
+           if (date === 'today') {
+               const start = new Date(); start.setHours(0,0,0,0);
+               const end = new Date(); end.setHours(23,59,59,999);
+               query.startTime = { $gte: start, $lte: end };
+           } else if (date === 'tomorrow') {
+               const start = new Date(); start.setDate(start.getDate()+1); start.setHours(0,0,0,0);
+               const end = new Date(); end.setDate(end.getDate()+1); end.setHours(23,59,59,999);
+               query.startTime = { $gte: start, $lte: end };
+           }
+   
            if (search) {
                query.$or = [
                    { homeTeam: { $regex: search, $options: 'i' } },
@@ -271,7 +278,6 @@
        try {
            const match = await Match.findById(req.params.id);
            if (!match) return res.status(404).json({ success: false, message: 'Match not found.' });
-   
            const markets = [
                { name: '1X2', selections: [
                    { name: '1', odd: match.odds['1'] },
@@ -285,6 +291,21 @@
                { name: 'Both Teams To Score', selections: [
                    { name: 'Yes', odd: 1.75 },
                    { name: 'No', odd: 2.05 }
+               ]},
+               { name: 'Double Chance', selections: [
+                   { name: '1X', odd: (match.odds['1'] + match.odds['X']) / 1.8 },
+                   { name: '12', odd: (match.odds['1'] + match.odds['2']) / 1.8 },
+                   { name: 'X2', odd: (match.odds['X'] + match.odds['2']) / 1.8 }
+               ]},
+               { name: 'Correct Score', selections: [
+                   { name: '1:0', odd: 6.50 },
+                   { name: '2:1', odd: 8.00 },
+                   { name: '0:0', odd: 9.50 },
+                   { name: '1:1', odd: 7.00 },
+                   { name: '2:2', odd: 15.00 },
+                   { name: '0:1', odd: 10.00 },
+                   { name: '1:2', odd: 12.00 },
+                   { name: '0:2', odd: 14.00 }
                ]}
            ];
            res.json({ success: true, markets });
@@ -307,14 +328,11 @@
            if (!selections || !selections.length || !stake || !totalOdds) return res.status(400).json({ success: false, message: 'Invalid bet data.' });
            if (stake < 10) return res.status(400).json({ success: false, message: 'Minimum stake is KES 10.' });
            if (stake > req.user.balance) return res.status(400).json({ success: false, message: 'Insufficient balance.' });
-   
            const bet = new Bet({ userId: req.user._id, selections, stake, totalOdds, potentialWin });
            await bet.save();
-   
            req.user.balance -= stake;
            req.user.totalBets += 1;
            await req.user.save();
-   
            res.json({ success: true, betId: bet._id, message: 'Bet placed successfully.', potentialWin });
        } catch (err) { next(err); }
    });
@@ -336,90 +354,60 @@
                'soccer_epl', 'soccer_uefa_champs_league', 'soccer_spain_la_liga', 'soccer_italy_serie_a',
                'basketball_nba', 'tennis_atp', 'mma_mixed_martial_arts'
            ];
-           
            let allApiMatches = [];
-           
            for (const sport of sportsToFetch) {
                try {
                    const response = await axios.get(`https://parlay-api.com/v4/sports/${sport}/odds?apiKey=${PARLAY_API_KEY}&regions=us,eu,uk&markets=h2h,spreads`);
-                   if (response.data && Array.isArray(response.data)) {
-                       allApiMatches = allApiMatches.concat(response.data);
-                   }
+                   if (response.data && Array.isArray(response.data)) allApiMatches = allApiMatches.concat(response.data);
                } catch (e) {
-                   const apiErrorMsg = e.response?.data?.message || e.message;
-                   console.error(`❌ Failed to fetch sport ${sport}:`, apiErrorMsg);
+                   console.error(`❌ Failed to fetch sport ${sport}:`, e.response?.data?.message || e.message);
                }
            }
-           
            const now = new Date();
            let syncedCount = 0;
-   
            for (const match of allApiMatches) {
                const matchDate = new Date(match.commence_time);
-               if (now.getTime() - matchDate.getTime() >= 0) continue; 
-   
+               if (now.getTime() - matchDate.getTime() >= 0) continue;
                const market = match.bookmakers[0]?.markets[0];
                let homeOdds = 1.90, drawOdds = null, awayOdds = 1.90;
-   
                if (market && market.outcomes) {
                    const homeOutcome = market.outcomes.find(o => o.name === match.home_team);
                    const awayOutcome = market.outcomes.find(o => o.name === match.away_team);
                    const drawOutcome = market.outcomes.find(o => o.name === 'Draw' || (o.name !== match.home_team && o.name !== match.away_team));
-   
                    if (homeOutcome) homeOdds = homeOutcome.price;
                    if (awayOutcome) awayOdds = awayOutcome.price;
                    if (drawOutcome) drawOdds = drawOutcome.price;
                }
-   
                let mappedSport = 'soccer';
                if (match.sport_key.includes('basketball')) mappedSport = 'basketball';
                if (match.sport_key.includes('tennis')) mappedSport = 'tennis';
                if (match.sport_key.includes('mma') || match.sport_key.includes('ufc')) mappedSport = 'mma';
-   
                if (mappedSport === 'soccer' && !drawOdds) {
                    drawOdds = parseFloat(((homeOdds + awayOdds) / 1.6).toFixed(2));
                    if (drawOdds < 2.5) drawOdds = 3.10;
                }
-   
                await Match.findOneAndUpdate(
                    { apiId: match.id },
                    {
-                       apiId: match.id,
-                       sport: mappedSport,
-                       league: match.sport_title || 'League',
-                       homeTeam: match.home_team,
-                       awayTeam: match.away_team,
-                       startTime: matchDate,
-                       isLive: false,
-                       odds: {
-                           '1': parseFloat(homeOdds) || 0,
-                           'X': parseFloat(drawOdds) || 0,
-                           '2': parseFloat(awayOdds) || 0
-                       },
-                       marketsCount: Math.floor(Math.random() * 150) + 50, 
-                       featured: Math.random() > 0.8
+                       apiId: match.id, sport: mappedSport, league: match.sport_title || 'League',
+                       homeTeam: match.home_team, awayTeam: match.away_team, startTime: matchDate,
+                       isLive: false, odds: { '1': parseFloat(homeOdds) || 0, 'X': parseFloat(drawOdds) || 0, '2': parseFloat(awayOdds) || 0 },
+                       marketsCount: Math.floor(Math.random() * 150) + 50, featured: Math.random() > 0.8
                    },
                    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
                );
                syncedCount++;
            }
-   
            console.log(`✅ Synced ${syncedCount} upcoming matches from Parlay API to MongoDB`);
-       } catch (e) {
-           console.error("🔥 Master Odds Fetch Error:", e.message);
-       }
+       } catch (e) { console.error("🔥 Master Odds Fetch Error:", e.message); }
    }
    
    /* =========================================================
-      GLOBAL ERROR HANDLER (Catches silent crashes)
+      GLOBAL ERROR HANDLER
       ========================================================= */
    app.use((err, req, res, next) => {
        console.error("🔥 FATAL EXPRESS ERROR:", err.stack);
-       res.status(500).json({ 
-           success: false, 
-           message: "Server crashed internally.", 
-           error_details: err.message 
-       });
+       res.status(500).json({ success: false, message: "Server crashed internally.", error_details: err.message });
    });
    
    /* =========================================================
@@ -428,10 +416,8 @@
    mongoose.connect(MONGO_URI)
        .then(() => {
            console.log('MongoDB connected');
-           
            fetchAndCacheLiveOdds();
-           setInterval(fetchAndCacheLiveOdds, 30 * 60 * 1000); 
-   
+           setInterval(fetchAndCacheLiveOdds, 30 * 60 * 1000);
            app.listen(PORT, () => {
                console.log(`BetWinn API running on port ${PORT}`);
                console.log(`API Base: ${API_URL}`);
