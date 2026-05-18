@@ -96,59 +96,33 @@
    };
    
    function getCountryCodeFromSportKey(sportKey) {
-    if (!sportKey) return 'gb-eng';
+    if (!sportKey) return 'gb';
     const map = {
-        'soccer_epl': 'gb-eng', 'soccer_spain': 'es', 'soccer_italy': 'it', 'soccer_germany': 'de',
-        'soccer_france': 'fr', 'soccer_uefa': 'eu', 'soccer_netherlands': 'nl', 'soccer_portugal': 'pt',
-        'soccer_belgium': 'be', 'soccer_turkey': 'tr', 'soccer_russia': 'ru', 'soccer_ukraine': 'ua',
-        'soccer_denmark': 'dk', 'soccer_sweden': 'se', 'soccer_norway': 'no', 'soccer_finland': 'fi',
-        'soccer_switzerland': 'ch', 'soccer_austria': 'at', 'soccer_poland': 'pl', 'soccer_czech': 'cz',
-        'soccer_greece': 'gr', 'soccer_romania': 'ro', 'soccer_brazil': 'br', 'soccer_argentina': 'ar',
-        'soccer_mexico': 'mx', 'soccer_usa': 'us', 'soccer_canada': 'ca', 'soccer_australia': 'au',
-        'soccer_japan': 'jp', 'soccer_china': 'cn', 'soccer_korea': 'kr', 'soccer_india': 'in',
-        'soccer_saudi': 'sa', 'soccer_qatar': 'qa', 'soccer_uae': 'ae', 'soccer_egypt': 'eg',
-        'soccer_morocco': 'ma', 'soccer_nigeria': 'ng', 'soccer_southafrica': 'za', 'soccer_ghana': 'gh',
-        'soccer_kenya': 'ke', 'soccer_tanzania': 'tz', 'soccer_uganda': 'ug', 'soccer_ethiopia': 'et',
-        'soccer_cameroon': 'cm', 'soccer_senegal': 'sn', 'soccer_mali': 'ml', 'soccer_ivory': 'ci',
-        'soccer_algeria': 'dz', 'soccer_tunisia': 'tn', 'soccer_libya': 'ly', 'soccer_sudan': 'sd',
-        'soccer_zimbabwe': 'zw', 'soccer_zambia': 'zm', 'soccer_mozambique': 'mz', 'soccer_angola': 'ao',
-        'soccer_botswana': 'bw', 'soccer_namibia': 'na', 'soccer_malawi': 'mw', 'soccer_madagascar': 'mg',
-        'soccer_mauritius': 'mu', 'soccer_seychelles': 'sc', 'soccer_comoros': 'km', 'soccer_cape': 'cv',
-        'soccer_guinea': 'gn', 'soccer_guineabissau': 'gw', 'soccer_gambia': 'gm', 'soccer_liberia': 'lr',
-        'soccer_sierra': 'sl', 'soccer_benin': 'bj', 'soccer_togo': 'tg', 'soccer_burkina': 'bf',
-        'soccer_niger': 'ne', 'soccer_chad': 'td', 'soccer_centralafrican': 'cf', 'soccer_congo': 'cg',
-        'soccer_drc': 'cd', 'soccer_gabon': 'ga', 'soccer_equatorial': 'gq', 'soccer_sao': 'st',
-        'soccer_rwanda': 'rw', 'soccer_burundi': 'bi', 'soccer_djibouti': 'dj', 'soccer_eritrea': 'er',
-        'soccer_somalia': 'so', 'soccer_southsudan': 'ss', 'basketball_nba': 'us', 'basketball_euroleague': 'eu',
-        'basketball_spain': 'es', 'basketball_italy': 'it', 'basketball_germany': 'de', 'basketball_france': 'fr',
-        'basketball_turkey': 'tr', 'basketball_greece': 'gr', 'basketball_russia': 'ru', 'basketball_australia': 'au',
-        'basketball_china': 'cn', 'tennis_atp': 'gb-eng', 'tennis_wta': 'gb-eng', 'mma_ufc': 'us',
-        'mma_bellator': 'us', 'mma_one': 'sg', 'icehockey_nhl': 'us', 'icehockey_khl': 'ru',
-        'icehockey_sweden': 'se', 'icehockey_finland': 'fi', 'icehockey_czech': 'cz', 'icehockey_switzerland': 'ch',
-        'icehockey_germany': 'de', 'baseball_mlb': 'us', 'baseball_japan': 'jp', 'baseball_korea': 'kr',
-        'americanfootball_nfl': 'us', 'americanfootball_ncaaf': 'us', 'rugby_six': 'gb-eng', 'rugby_world': 'gb-eng',
-        'cricket_ipl': 'in', 'cricket_bbl': 'au', 'cricket_psl': 'pk', 'cricket_cpl': 'west',
-        'volleyball_italy': 'it', 'volleyball_brazil': 'br', 'volleyball_russia': 'ru', 'volleyball_poland': 'pl',
-        'golf_pga': 'us', 'golf_european': 'eu', 'golf_liv': 'sa', 'boxing_wbc': 'mx', 'boxing_wba': 'us',
-        'boxing_ibf': 'us', 'boxing_wbo': 'pr', 'motorsports_f1': 'gb-eng', 'motorsports_motogp': 'it',
-        'motorsports_nascar': 'us', 'cycling_tour': 'fr', 'cycling_giro': 'it', 'cycling_vuelta': 'es',
-        'darts_pdc': 'gb-eng', 'snooker_world': 'gb-eng', 'handball_germany': 'de', 'handball_spain': 'es',
-        'handball_france': 'fr', 'handball_denmark': 'dk', 'waterpolo_italy': 'it', 'waterpolo_spain': 'es',
-        'futsal_spain': 'es', 'futsal_portugal': 'pt', 'aussierules_afl': 'au', 'floorball_sweden': 'se',
-        'floorball_finland': 'fi', 'floorball_switzerland': 'ch',
-        'esports': 'us', 'esports_lol': 'kr', 'esports_csgo': 'se', 'esports_dota2': 'us', 'esports_valorant': 'us',
-        'cricket_international': 'gb-eng', 'cricket_test': 'gb-eng', 'cricket_odi': 'in', 'cricket_t20': 'in',
-        'rugby_six_nations': 'gb-eng', 'rugby_world_cup': 'gb-eng',
+        'soccer_epl': 'gb',           // changed from 'gb-eng'
+        'soccer_spain': 'es',
+        'soccer_italy': 'it',
+        'soccer_germany': '#de',
+        'soccer_france': 'fr',
+        'soccer_uefa': 'eu',          // flagcdn handles 'eu' beautifully
+        'soccer_netherlands': 'nl',
+        'soccer_portugal': 'pt',
+        'soccer_belgium': 'be',
+        'soccer_turkey': 'tr',
+        'soccer_usa': 'us',
+        'soccer_canada': 'ca',
+        'soccer_australia': 'au',
+        'soccer_kenya': 'ke',
+        'soccer_tanzania': 'tz',
+        'soccer_uganda': 'ug',
+        'basketball_nba': 'us',
+        'tennis_atp': 'gb',
+        'tennis_wta': 'gb',
+        'mma_ufc': 'us'
     };
     for (const [prefix, code] of Object.entries(map)) {
         if (sportKey.toLowerCase().startsWith(prefix)) return code;
     }
-    // Extract any 2-letter country code if present
-    const parts = sportKey.split('_');
-    for (const p of parts) {
-        if (p.length === 2 && /^[a-z]{2}$/.test(p)) return p;
-    }
-    return 'gb-eng';
+    return 'gb'; // fallback code string
 }
 
 function getTeamFlagUrl(teamName, countryCode) {
@@ -634,7 +608,6 @@ function getMatchTimeStr(startTimeStr) {
    });
    
    app.get('/api/live-matches', async (req, res) => {
-       try {
            const now = new Date();
            const matches = await Match.find({ apiId: { $exists: true }, status: { $in: ['upcoming', 'live'] } }).sort({ startTime: 1 }).limit(500).lean();
 
