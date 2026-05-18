@@ -8,7 +8,7 @@
    const cors = require('cors');
    const helmet = require('helmet');
    const rateLimit = require('express-rate-limit');
-   const mongoSanitize = require('express-mongo-sanitize');
+   // const mongoSanitize = require('express-mongo-sanitize'); // <-- DISABLED: Causing 500 errors
    const mongoose = require('mongoose');
    const bcrypt = require('bcrypt');
    const jwt = require('jsonwebtoken');
@@ -19,7 +19,7 @@
    // This ensures rate limiting uses the actual client IP, not the proxy's IP.
    app.set('trust proxy', 1);
    
-   const PORT = process.env.PORT || 3012; // Adjusted to match your terminal output
+   const PORT = process.env.PORT || 3012; 
    const JWT_SECRET = process.env.JWT_SECRET || 'betwinn_secret_key_2026';
    const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/betwinn';
    const API_URL = process.env.NODE_ENV === 'production' ? 'https://api.betwinn.co.ke/api' : `http://localhost:${PORT}/api`;
@@ -34,7 +34,7 @@
        origin: [
            'https://betwinn.co.ke', 
            'https://www.betwinn.co.ke',
-           'http://localhost:3012', // Keep for local frontend testing
+           'http://localhost:3012', 
            'http://127.0.0.1:3012'
        ],
        methods: ['GET', 'POST', 'PUT', 'DELETE'],
@@ -42,7 +42,8 @@
    }));
    
    app.use(express.json({ limit: '10mb' }));
-   app.use(mongoSanitize());
+   
+   // app.use(mongoSanitize()); <-- DISABLED to fix the "IncomingMessage" 500 Crash
    
    const limiter = rateLimit({
        windowMs: 15 * 60 * 1000, // 15 minutes
