@@ -1,5 +1,5 @@
 /* =========================================================
-   BETWINN SERVER.JS (with Parlay API Integration)
+   BETWINN SERVER.JS (Bulletproof Edition)
    Express + MongoDB + JWT + bcrypt + axios
    ========================================================= */
 
@@ -42,18 +42,16 @@
    
    app.use(express.json({ limit: '10mb' }));
    
-   // app.use(mongoSanitize()); <-- DISABLED to fix the "IncomingMessage" 500 Crash
-   
    const limiter = rateLimit({
        windowMs: 15 * 60 * 1000,
-       max: 100,
+       max: 200,
        message: { success: false, message: 'Too many requests, please try again later.' }
    });
    app.use('/api/', limiter);
    
    const authLimiter = rateLimit({
        windowMs: 60 * 60 * 1000,
-       max: 10,
+       max: 15,
        message: { success: false, message: 'Too many auth attempts, please try again later.' }
    });
    app.use('/api/auth/', authLimiter);
@@ -75,7 +73,7 @@
    const User = mongoose.model('User', userSchema);
    
    const matchSchema = new mongoose.Schema({
-       apiId: { type: String, unique: true, sparse: true }, // Added for Parlay API sync tracking
+       apiId: { type: String, unique: true, sparse: true }, 
        league: { type: String, required: true },
        homeTeam: { type: String, required: true },
        awayTeam: { type: String, required: true },
@@ -99,7 +97,7 @@
    const betSchema = new mongoose.Schema({
        userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
        selections: [{
-           matchId: { type: Number, required: true }, // Note: If using MongoDB ObjectIds, this might need to change to String if using apiId
+           matchId: { type: Number, required: true }, 
            pick: { type: String, required: true },
            odd: { type: Number, required: true },
            title: { type: String }
@@ -142,9 +140,16 @@
    };
    
    /* =========================================================
+      HEALTH CHECK ROUTE
+      ========================================================= */
+   app.get('/api/health', (req, res) => {
+       res.json({ success: true, message: "API is online and running smoothly!" });
+   });
+   
+   /* =========================================================
       AUTH & USER ROUTES
       ========================================================= */
-   app.post('/api/auth/register', async (req, res) => {
+   app.post('/api/auth/register', async (req, res, next) => {
        try {
            const { name, email, phone, password } = req.body;
            if (!name || !phone || !password) return res.status(400).json({ success: false, message: 'Missing fields.' });
@@ -158,10 +163,10 @@
    
            const token = jwt.sign({ id: user._id, phone: user.phone }, JWT_SECRET, { expiresIn: '7d' });
            res.status(201).json({ success: true, token, user: { id: user._id, name: user.name, phone: user.phone, balance: user.balance } });
-       } catch (err) { res.status(500).json({ success: false, message: 'Server error' }); }
+       } catch (err) { next(err); }
    });
    
-   app.post('/api/auth/login', async (req, res) => {
+   app.post('/api/auth/login', async (req, res, next) => {
        try {
            const { phone, password } = req.body;
            const user = await User.findOne({ phone });
@@ -169,7 +174,7 @@
    
            const token = jwt.sign({ id: user._id, phone: user.phone }, JWT_SECRET, { expiresIn: '7d' });
            res.json({ success: true, token, user: { id: user._id, name: user.name, phone: user.phone, balance: user.balance } });
-       } catch (err) { res.status(500).json({ success: false, message: 'Server error' }); }
+       } catch (err) { next(err); }
    });
    
    app.get('/api/user', authenticate, async (req, res) => {
@@ -199,9 +204,9 @@
        res.json({ success: true, competitions });
    });
    
-   app.get('/api/matches', async (req, res) => {
+   app.get('/api/matches', async (req, res, next) => {
        try {
-           const { sport, league, status, date, search, page = 1, limit = 50 } = req.query;
+           const { sport, league, status, search, page = 1, limit = 50 } = req.query;
            let query = {};
    
            if (sport) query.sport = sport;
@@ -222,21 +227,17 @@
                .skip((parseInt(page) - 1) * parseInt(limit));
    
            res.json({ success: true, matches, page: parseInt(page), total: await Match.countDocuments(query) });
-       } catch (err) {
-           res.status(500).json({ success: false, message: 'Failed to fetch matches.' });
-       }
+       } catch (err) { next(err); }
    });
    
-   app.get('/api/matches/featured', async (req, res) => {
+   app.get('/api/matches/featured', async (req, res, next) => {
        try {
            const matches = await Match.find({ featured: true, startTime: { $gte: new Date() } }).limit(10).sort({ startTime: 1 });
            res.json({ success: true, matches });
-       } catch (err) {
-           res.status(500).json({ success: false, message: 'Failed to fetch featured matches.' });
-       }
+       } catch (err) { next(err); }
    });
    
-   app.get('/api/match/:id/markets', async (req, res) => {
+   app.get('/api/match/:id/markets', async (req, res, next) => {
        try {
            const match = await Match.findById(req.params.id);
            if (!match) return res.status(404).json({ success: false, message: 'Match not found.' });
@@ -257,22 +258,20 @@
                ]}
            ];
            res.json({ success: true, markets });
-       } catch (err) {
-           res.status(500).json({ success: false, message: 'Failed to fetch markets.' });
-       }
+       } catch (err) { next(err); }
    });
    
    /* =========================================================
       BETTING & NOTIFICATIONS
       ========================================================= */
-   app.get('/api/notifications', authenticate, async (req, res) => {
+   app.get('/api/notifications', authenticate, async (req, res, next) => {
        try {
            const notifications = await Notification.find({ userId: req.user._id }).sort({ createdAt: -1 }).limit(20);
            res.json({ success: true, notifications });
-       } catch (err) { res.status(500).json({ success: false }); }
+       } catch (err) { next(err); }
    });
    
-   app.post('/api/bets/place', authenticate, async (req, res) => {
+   app.post('/api/bets/place', authenticate, async (req, res, next) => {
        try {
            const { selections, stake, totalOdds, potentialWin } = req.body;
            if (!selections || !selections.length || !stake || !totalOdds) return res.status(400).json({ success: false, message: 'Invalid bet data.' });
@@ -287,22 +286,22 @@
            await req.user.save();
    
            res.json({ success: true, betId: bet._id, message: 'Bet placed successfully.', potentialWin });
-       } catch (err) { res.status(500).json({ success: false, message: 'Failed to place bet.' }); }
+       } catch (err) { next(err); }
    });
    
-   app.get('/api/bets/my', authenticate, async (req, res) => {
+   app.get('/api/bets/my', authenticate, async (req, res, next) => {
        try {
            const bets = await Bet.find({ userId: req.user._id }).sort({ placedAt: -1 }).limit(50);
            res.json({ success: true, bets });
-       } catch (err) { res.status(500).json({ success: false }); }
+       } catch (err) { next(err); }
    });
    
    /* =========================================================
-      PARLAY API BACKGROUND SYNC
+      THE ODDS API BACKGROUND SYNC
       ========================================================= */
    async function fetchAndCacheLiveOdds() {
        try {
-           console.log("🔄 Fetching live odds from parlay-api.com (v4)...");
+           console.log("🔄 Fetching live odds from api.the-odds-api.com...");
            const sportsToFetch = [
                'soccer_epl', 'soccer_uefa_champs_league', 'soccer_spain_la_liga', 'soccer_italy_serie_a',
                'basketball_nba', 'tennis_atp', 'mma_mixed_martial_arts'
@@ -312,16 +311,19 @@
            
            for (const sport of sportsToFetch) {
                try {
-                const response = await axios.get(`https://api.the-odds-api.com/v4/sports/${sport}/odds?apiKey=${ODDS_API_KEY}&regions=us,eu,uk&markets=h2h,spreads`);
+                   const response = await axios.get(`https://api.the-odds-api.com/v4/sports/${sport}/odds?apiKey=${ODDS_API_KEY}&regions=us,eu,uk&markets=h2h,spreads`);
                    if (response.data && Array.isArray(response.data)) {
                        allApiMatches = allApiMatches.concat(response.data);
                    }
                } catch (e) {
-                   console.error(`Failed to fetch sport ${sport}:`, e.message);
+                   // Improved Error Logging for the API
+                   const apiErrorMsg = e.response?.data?.message || e.message;
+                   console.error(`❌ Failed to fetch sport ${sport}:`, apiErrorMsg);
                }
            }
            
            const now = new Date();
+           let syncedCount = 0;
    
            for (const match of allApiMatches) {
                const matchDate = new Date(match.commence_time);
@@ -372,13 +374,26 @@
                    },
                    { upsert: true, new: true, setDefaultsOnInsert: true }
                );
+               syncedCount++;
            }
    
-           console.log(`✅ Synced ${allApiMatches.length} upcoming matches from Parlay API to MongoDB`);
+           console.log(`✅ Synced ${syncedCount} upcoming matches from The Odds API to MongoDB`);
        } catch (e) {
-           console.error("Master Odds Fetch Error:", e.message);
+           console.error("🔥 Master Odds Fetch Error:", e.message);
        }
    }
+   
+   /* =========================================================
+      GLOBAL ERROR HANDLER (Catches silent crashes)
+      ========================================================= */
+   app.use((err, req, res, next) => {
+       console.error("🔥 FATAL EXPRESS ERROR:", err.stack);
+       res.status(500).json({ 
+           success: false, 
+           message: "Server crashed internally.", 
+           error_details: err.message 
+       });
+   });
    
    /* =========================================================
       START SERVER
@@ -387,7 +402,7 @@
        .then(() => {
            console.log('MongoDB connected');
            
-           // Trigger Parlay API sync immediately on startup, then every 30 minutes
+           // Trigger API sync immediately on startup, then every 30 minutes
            fetchAndCacheLiveOdds();
            setInterval(fetchAndCacheLiveOdds, 30 * 60 * 1000); 
    
