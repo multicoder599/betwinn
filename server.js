@@ -311,7 +311,7 @@
            
            for (const sport of sportsToFetch) {
                try {
-                   const response = await axios.get(`https://api.the-odds-api.com/v4/sports/${sport}/odds?apiKey=${ODDS_API_KEY}&regions=us,eu,uk&markets=h2h,spreads`);
+                const response = await axios.get(`https://parlay-api.com/v4/sports/${sport}/odds?apiKey=${ODDS_API_KEY}&regions=us,eu,uk&markets=h2h,spreads`);
                    if (response.data && Array.isArray(response.data)) {
                        allApiMatches = allApiMatches.concat(response.data);
                    }
