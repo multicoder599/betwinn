@@ -665,49 +665,6 @@ function getMatchTimeStr(startTimeStr) {
        }
    });
    
-           const tomorrow = new Date(); tomorrow.setDate(now.getDate()+1); tomorrow.setHours(0,0,0,0);
-           const nextWeek = new Date(); nextWeek.setDate(now.getDate()+7);
-           const fromDate = tomorrow.toISOString().split('.')[0]+'Z';
-           const toDate = nextWeek.toISOString().split('.')[0]+'Z';
-   
-           const sportsToFetch = ['soccer_epl','soccer_uefa_champs_league','soccer_italy_serie_a','soccer_spain_la_liga','soccer_germany_bundesliga','soccer_france_ligue_one','basketball_nba','icehockey_nhl','mma_mixed_martial_arts','americanfootball_nfl','baseball_mlb'];
-           let allApi = [];
-           await Promise.all(sportsToFetch.map(async (sk) => {
-               try {
-                   const r = await axios.get(`https://api.the-odds-api.com/v4/sports/${sk}/odds/`, { params: { apiKey: ODDS_API_KEY, regions: 'eu,uk', markets: 'h2h', oddsFormat: 'decimal' }, timeout: 8000 });
-                   if (r.data && Array.isArray(r.data)) allApi = allApi.concat(r.data);
-               } catch(e){}
-           }));
-   
-           let apiMatches = allApi.map(m => {
-               let md = new Date(m.commence_time);
-               if (now.getTime() - md.getTime() >= 0) return null;
-               const mk = m.bookmakers[0]?.markets[0];
-               let h = 2.10, d = null, a = 2.80;
-               if (mk && mk.outcomes) {
-                   const ho = mk.outcomes.find(o => o.name === m.home_team);
-                   const ao = mk.outcomes.find(o => o.name === m.away_team);
-                   const dr = mk.outcomes.find(o => o.name === 'Draw' || (o.name !== m.home_team && o.name !== m.away_team));
-                   if (ho) h = ho.price; if (ao) a = ao.price; if (dr) d = dr.price;
-               }
-               let sp = 'soccer';
-               if (m.sport_key.includes('basketball')) sp = 'basketball';
-               if (m.sport_key.includes('tennis')) sp = 'tennis';
-               if (m.sport_key.includes('mma')) sp = 'mma';
-               if (m.sport_key.includes('icehockey')) sp = 'hockey';
-               if (m.sport_key.includes('americanfootball')) sp = 'rugby';
-               if (m.sport_key.includes('baseball')) sp = 'baseball';
-               if (sp === 'soccer' && !d) { d = parseFloat(((h+a)/1.5).toFixed(2)); if (d < 2.5) d = 3.10; }
-               let cc = 'gb-eng'; if (m.sport_key.includes('germany')) cc='de'; else if (m.sport_key.includes('spain')) cc='es'; else if (m.sport_key.includes('italy')) cc='it'; else if (m.sport_key.includes('france')) cc='fr'; else if (m.sport_key.includes('usa')) cc='us';
-               return { id: 'api_'+m.id, sport: sp, region: 'Global', league: m.sport_title||'League', country: cc, home: m.home_team, away: m.away_team, isLive: false, isFeatured: Math.random()>0.7, startTime: md.toISOString(), score: null, odds: [h,d,a], marketCount: Math.floor(Math.random()*150)+30, gradeScore: sp==='soccer'?80:50, status: 'upcoming', result: null, finalScore: null };
-           }).filter(Boolean);
-   
-           let combined = [...dbMatches, ...apiMatches].sort((a,b) => (b.gradeScore||0) - (a.gradeScore||0));
-           combined = combined.map(m => enrichMatchWithFlags(m));
-           res.json({ success: true, matches: combined.slice(0,500) });
-       } catch (err) { res.status(500).json({ error: "Fetch failed." }); }
-   });
-   
    app.get('/api/search', async (req, res) => {
        try {
            const q = req.query.q;
