@@ -604,7 +604,7 @@ function getMatchTimeStr(startTimeStr) {
            else if (date === 'tomorrow') { const s = new Date(); s.setDate(s.getDate()+1); s.setHours(0,0,0,0); const e = new Date(); e.setDate(e.getDate()+1); e.setHours(23,59,59,999); query.startTime = { $gte: s, $lte: e }; }
            if (search) { query.$or = [{ homeTeam: { $regex: search, $options: 'i' } }, { awayTeam: { $regex: search, $options: 'i' } }, { league: { $regex: search, $options: 'i' } }]; }
    
-           const matches = await Match.find(query).sort({ startTime: 1 }).limit(parseInt(limit)).skip((parseInt(page) - 1) * parseInt(limit));
+           const matches = await Match.find(query).sort({ startTime: 1 }).limit(parseInt(limit)).skip((parseInt(page) - 1) * parseInt(limit)).lean();
            let formatted = matches.map(m => {
                const obj = m.toObject();
                if (m.status === 'live' && m.startTime) {
@@ -622,7 +622,7 @@ function getMatchTimeStr(startTimeStr) {
    
    app.get('/api/matches/featured', async (req, res, next) => {
        try {
-           const matches = await Match.find({ featured: true, status: { $in: ['upcoming', 'live'] } }).limit(10).sort({ startTime: 1 });
+        const matches = await Match.find({ featured: true, status: { $in: ['upcoming', 'live'] } }).limit(10).sort({ startTime: 1 }).lean();
            let formatted = matches.map(m => {
                const obj = m.toObject(); obj.id = m._id.toString();
                if (m.status === 'live' && m.startTime) { obj.score = getDeterministicScore(m._id.toString(), m.startTime.toISOString(), m.result); obj.time = getMatchTimeStr(m.startTime.toISOString()); obj.isLive = true; }
@@ -636,9 +636,7 @@ function getMatchTimeStr(startTimeStr) {
    app.get('/api/live-matches', async (req, res) => {
        try {
            const now = new Date();
-           const matches = await Match.find({ apiId: { $exists: true }, status: { $in: ['upcoming', 'live'] } })
-               .sort({ startTime: 1 })
-               .limit(500);
+           const matches = await Match.find({ apiId: { $exists: true }, status: { $in: ['upcoming', 'live'] } }).sort({ startTime: 1 }).limit(500).lean();
 
            let formatted = matches.map(m => {
                const obj = m.toObject();
