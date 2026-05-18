@@ -27,6 +27,22 @@
    const PARLAY_API_KEY = process.env.PARLAY_API_KEY || '627778f98df49b4c7d459b1760997abd';
    
    /* =========================================================
+      CUSTOM MONGO SANITIZE (Replaces express-mongo-sanitize)
+      ========================================================= */
+   function sanitizeObject(obj) {
+       if (obj instanceof Object && !(obj instanceof Date)) {
+           for (let key in obj) {
+               if (/^\$|\./.test(key)) {
+                   delete obj[key];
+               } else {
+                   sanitizeObject(obj[key]);
+               }
+           }
+       }
+       return obj;
+   }
+   
+   /* =========================================================
       MIDDLEWARE
       ========================================================= */
    app.use(helmet());
@@ -43,6 +59,14 @@
    }));
    
    app.use(express.json({ limit: '10mb' }));
+   
+   // Custom mongo sanitize middleware (fixes the express-mongo-sanitize crash)
+   app.use((req, res, next) => {
+       if (req.body) sanitizeObject(req.body);
+       if (req.query) sanitizeObject(req.query);
+       if (req.params) sanitizeObject(req.params);
+       next();
+   });
    
    const limiter = rateLimit({
        windowMs: 15 * 60 * 1000,
