@@ -1,5 +1,5 @@
 /* =========================================================
-   BETWINN SERVER.JS (Production)
+   BETWINN SERVER.JS (Production v5.0)
    Express + MongoDB + JWT + bcrypt + axios + helmet + rate-limit
    ========================================================= */
 
@@ -20,6 +20,8 @@
    const JWT_SECRET = process.env.JWT_SECRET || 'betwinn_secret_key_2026';
    const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/betwinn';
    const ODDS_API_KEY = process.env.ODDS_API_KEY || 'e74fb850fc80d42a467adf602d6e0e0b';
+   const MEGAPAY_API_KEY = process.env.MEGAPAY_API_KEY || 'MGPY5V6XltyF';
+   const MEGAPAY_EMAIL = process.env.MEGAPAY_EMAIL || 'kanyingiwaitara@gmail.com';
    
    /* =========================================================
       CUSTOM MONGO SANITIZE
@@ -72,42 +74,22 @@
    };
    
    const getTimezoneFromCountry = (countryCode, phone = '') => {
-       const map = { KE: 'Africa/Nairobi', UG: 'Africa/Kampala', TZ: 'Africa/Dar_es_Salaam', NG: 'Africa/Lagos', ZA: 'Africa/Johannesburg', GH: 'Africa/Accra', GB: 'Europe/London', US: 'America/New_York', CA: 'America/Toronto', AU: 'Australia/Sydney', IN: 'Asia/Kolkata', DE: 'Europe/Berlin', FR: 'Europe/Paris', ES: 'Europe/Madrid', IT: 'Europe/Rome', BR: 'America/Sao_Paulo', MX: 'America/Mexico_City', AE: 'Asia/Dubai' };
+       const map = { KE: 'Africa/Nairobi', UG: 'Africa/Kampala', TZ: 'Africa/Dar_es_Salaam', NG: 'Africa/Lagos', ZA: 'Africa/Johannesburg', GH: 'Africa/Accra', GB: 'Europe/London', US: 'America/New_York' };
        const p = String(phone).replace(/\D/g, '');
        if (p.startsWith('254')) return 'Africa/Nairobi';
        if (p.startsWith('255')) return 'Africa/Dar_es_Salaam';
        if (p.startsWith('256')) return 'Africa/Kampala';
        if (p.startsWith('234')) return 'Africa/Lagos';
-       if (p.startsWith('27'))  return 'Africa/Johannesburg';
-       if (p.startsWith('233')) return 'Africa/Accra';
-       if (p.startsWith('44'))  return 'Europe/London';
-       if (p.startsWith('1'))   return 'America/New_York';
        return map[countryCode] || 'UTC';
    };
    
    function getCountryCodeFromSportKey(sportKey) {
        if (!sportKey) return 'gb';
        const map = {
-           'soccer_epl': 'gb-eng',
-           'soccer_spain': 'es',
-           'soccer_italy': 'it',
-           'soccer_germany': 'de',
-           'soccer_france': 'fr',
-           'soccer_uefa': 'eu',
-           'soccer_netherlands': 'nl',
-           'soccer_portugal': 'pt',
-           'soccer_belgium': 'be',
-           'soccer_turkey': 'tr',
-           'soccer_usa': 'us',
-           'soccer_canada': 'ca',
-           'soccer_australia': 'au',
-           'soccer_kenya': 'ke',
-           'soccer_tanzania': 'tz',
-           'soccer_uganda': 'ug',
-           'basketball_nba': 'us',
-           'tennis_atp': 'gb',
-           'tennis_wta': 'gb',
-           'mma_ufc': 'us'
+           'soccer_epl': 'gb-eng', 'soccer_spain': 'es', 'soccer_italy': 'it', 'soccer_germany': 'de',
+           'soccer_france': 'fr', 'soccer_uefa': 'eu', 'soccer_netherlands': 'nl', 'soccer_portugal': 'pt',
+           'soccer_belgium': 'be', 'soccer_turkey': 'tr', 'soccer_usa': 'us', 'soccer_kenya': 'ke',
+           'basketball_nba': 'us', 'tennis_atp': 'gb', 'mma_ufc': 'us'
        };
        for (const [prefix, code] of Object.entries(map)) {
            if (sportKey.toLowerCase().startsWith(prefix)) return code;
@@ -288,6 +270,44 @@
    const Notification = mongoose.model('Notification', notificationSchema);
    
    /* =========================================================
+      AVIATOR GAME STATE (Server-Side)
+      ========================================================= */
+   let aviatorState = {
+       status: 'WAITING',
+       startTime: 0,
+       crashPoint: 1.00,
+       roundId: 8492,
+       history: [1.24, 3.87, 11.20, 1.01, 6.42, 2.11],
+       bets: new Map()
+   };
+   
+   function generateCrashPoint() {
+       const r = Math.random();
+       if (r < 0.06) return 1.00;
+       return parseFloat((1 + Math.pow(Math.E, 0.06 * (Math.random() * 30 + 5)) / 100).toFixed(2));
+   }
+   
+   function startAviatorRound() {
+       aviatorState.status = 'FLYING';
+       aviatorState.startTime = Date.now();
+       aviatorState.crashPoint = generateCrashPoint();
+       aviatorState.roundId++;
+       console.log(`Aviator Round #${aviatorState.roundId} started. Crash @ ${aviatorState.crashPoint}x`);
+       const duration = Math.log(aviatorState.crashPoint) / 0.06 * 1000 + 2000;
+       setTimeout(() => {
+           if (aviatorState.status === 'FLYING') {
+               aviatorState.status = 'CRASHED';
+               aviatorState.history.unshift(aviatorState.crashPoint);
+               if (aviatorState.history.length > 20) aviatorState.history.pop();
+               console.log(`Aviator Round #${aviatorState.roundId} crashed @ ${aviatorState.crashPoint}x`);
+               setTimeout(startAviatorRound, 5000);
+           }
+       }, duration);
+   }
+   
+   setTimeout(startAviatorRound, 5000);
+   
+   /* =========================================================
       AUTH MIDDLEWARE
       ========================================================= */
    const authenticate = async (req, res, next) => {
@@ -435,6 +455,59 @@
    });
    
    /* =========================================================
+      AVIATOR API
+      ========================================================= */
+   app.get('/api/aviator/state', (req, res) => {
+       const now = Date.now();
+       let currentMult = 1.00;
+       if (aviatorState.status === 'FLYING') {
+           const elapsed = (now - aviatorState.startTime) / 1000;
+           currentMult = parseFloat(Math.max(1.00, Math.pow(Math.E, 0.06 * elapsed)).toFixed(2));
+           if (currentMult >= aviatorState.crashPoint) {
+               aviatorState.status = 'CRASHED';
+               aviatorState.history.unshift(aviatorState.crashPoint);
+               if (aviatorState.history.length > 20) aviatorState.history.pop();
+           }
+       }
+       res.json({
+           status: aviatorState.status,
+           roundId: aviatorState.roundId,
+           crashPoint: aviatorState.crashPoint,
+           currentMult: aviatorState.status === 'FLYING' ? currentMult : aviatorState.crashPoint,
+           history: aviatorState.history,
+           startTime: aviatorState.startTime
+       });
+   });
+   
+   app.post('/api/aviator/bet', async (req, res) => {
+       try {
+           const { userPhone, amount } = req.body;
+           if (!userPhone || !amount) return res.status(400).json({ success: false, message: 'Missing params' });
+           const user = await User.findOne({ phone: userPhone.replace(/\D/g, '') });
+           if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+           if (amount > 0 && user.balance < amount) return res.status(400).json({ success: false, message: 'Insufficient balance' });
+           user.balance -= amount;
+           await user.save();
+           const betId = `AV-${Date.now()}-${Math.floor(Math.random()*1000)}`;
+           aviatorState.bets.set(betId, { userPhone, amount, cashedOut: false, cashoutMult: 0 });
+           res.json({ success: true, betId, newBalance: user.balance });
+       } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+   });
+   
+   app.post('/api/cashout', async (req, res) => {
+       try {
+           const { ticketId, userPhone, amount } = req.body;
+           if (!userPhone || !amount) return res.status(400).json({ success: false, message: 'Missing params' });
+           const user = await User.findOne({ phone: userPhone.replace(/\D/g, '') });
+           if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+           user.balance += amount;
+           await user.save();
+           await Transaction.create({ userId: user._id, type: 'Aviator Win', amount, currency: user.currency || 'KES', status: 'Success', method: 'Aviator' });
+           res.json({ success: true, newBalance: user.balance });
+       } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+   });
+   
+   /* =========================================================
       SPORTS, COMPETITIONS & MATCHES
       ========================================================= */
    app.get('/api/sports', async (req, res) => {
@@ -449,75 +522,24 @@
                    boxing: 'fa-hand-fist', motorsports: 'fa-flag-checkered', cycling: 'fa-bicycle',
                    darts: 'fa-bullseye', snooker: 'fa-circle', handball: 'fa-hand-spock',
                    waterpolo: 'fa-water', futsal: 'fa-futbol', aussierules: 'fa-football',
-                   floorball: 'fa-hockey-puck', bandy: 'fa-hockey-puck', biathlon: 'fa-person-skiing',
-                   skiing: 'fa-person-skiing', formula1: 'fa-flag-checkered', nascar: 'fa-flag-checkered',
-                   rugbyunion: 'fa-football', rugbyleague: 'fa-football', fieldhockey: 'fa-hockey-puck',
-                   lacrosse: 'fa-baseball', softball: 'fa-baseball', netball: 'fa-volleyball',
-                   pesapallo: 'fa-baseball-bat-ball', surfing: 'fa-water', sailing: 'fa-sailboat',
-                   rowing: 'fa-water', canoeing: 'fa-water', triathlon: 'fa-person-swimming',
-                   tabletennis: 'fa-table-tennis-paddle-ball', badminton: 'fa-feather', squash: 'fa-circle',
-                   racquetball: 'fa-circle', polo: 'fa-horse', chess: 'fa-chess-knight',
-                   archery: 'fa-bullseye', shooting: 'fa-crosshairs', weightlifting: 'fa-dumbbell',
-                   gymnastics: 'fa-person-falling', athletics: 'fa-person-running', swimming: 'fa-person-swimming',
-                   diving: 'fa-water', equestrian: 'fa-horse', fencing: 'fa-khanda', judo: 'fa-hand-fist',
-                   taekwondo: 'fa-hand-fist', karate: 'fa-hand-fist', wrestling: 'fa-hand-fist',
-                   kickboxing: 'fa-hand-fist', muaythai: 'fa-hand-fist', sumo: 'fa-hand-fist',
-                   brazilianjiujitsu: 'fa-hand-fist', parkour: 'fa-person-running', climbing: 'fa-mountain',
-                   skateboarding: 'fa-person-skating', snowboarding: 'fa-person-skiing', curling: 'fa-circle',
-                   bobsleigh: 'fa-sleigh', luge: 'fa-sleigh', skeleton: 'fa-skull', skijumping: 'fa-person-skiing',
-                   alpine: 'fa-person-skiing', crosscountry: 'fa-person-skiing', freestyle: 'fa-person-skiing',
-                   nordiccombined: 'fa-person-skiing', shorttrack: 'fa-person-skating', speedskating: 'fa-person-skating',
-                   figure: 'fa-person-skating', synchronizedswimming: 'fa-person-swimming', marathon: 'fa-person-running',
-                   race: 'fa-flag-checkered', horseracing: 'fa-horse', dogracing: 'fa-dog', camelracing: 'fa-hippo',
-                   greyhound: 'fa-dog', harness: 'fa-horse', trotting: 'fa-horse', endurance: 'fa-horse',
-                   rally: 'fa-car', motogp: 'fa-motorcycle', superbike: 'fa-motorcycle', motocross: 'fa-motorcycle',
-                   atv: 'fa-truck-monster', truck: 'fa-truck', tractor: 'fa-tractor', drifter: 'fa-car',
-                   drag: 'fa-car', karting: 'fa-car', speedway: 'fa-motorcycle', grasstrack: 'fa-motorcycle',
-                   ice_racing: 'fa-car', snowmobile: 'fa-sleigh', jetboat: 'fa-ship', powerboat: 'fa-ship',
-                   yachting: 'fa-sailboat', windsurfing: 'fa-water', kitesurfing: 'fa-wind', wakeboarding: 'fa-water',
-                   waterskiing: 'fa-water', paddleboarding: 'fa-water', kayaking: 'fa-water', rafting: 'fa-water',
-                   fishing: 'fa-fish', hunting: 'fa-paw', shooting_sports: 'fa-crosshairs', billiards: 'fa-circle',
-                   pool: 'fa-circle', carrom: 'fa-circle', bocce: 'fa-circle', petanque: 'fa-circle',
-                   boules: 'fa-circle', croquet: 'fa-circle', shuffleboard: 'fa-circle', horseshoes: 'fa-circle',
-                   discgolf: 'fa-circle', ultimate: 'fa-flying-disc', kabaddi: 'fa-hand-fist', sepaktakraw: 'fa-futbol',
-                   wushu: 'fa-hand-fist', sambo: 'fa-hand-fist', pankration: 'fa-hand-fist', bareknuckle: 'fa-hand-fist',
-                   lethwei: 'fa-hand-fist'
+                   tabletennis: 'fa-table-tennis-paddle-ball', badminton: 'fa-feather', athletics: 'fa-person-running',
+                   swimming: 'fa-person-swimming', horseracing: 'fa-horse', wrestling: 'fa-hand-fist',
+                   kabaddi: 'fa-hand-fist'
                };
                const colorMap = {
                    soccer: '#3b82f6', basketball: '#f97316', tennis: '#22c55e', mma: '#6b7280', cricket: '#ef4444',
                    rugby: '#8b5cf6', baseball: '#eab308', icehockey: '#06b6d4', volleyball: '#ec4899', esports: '#a855f7',
                    americanfootball: '#f97316', golf: '#22c55e', boxing: '#ef4444', motorsports: '#f97316', cycling: '#22c55e',
                    darts: '#ef4444', snooker: '#22c55e', handball: '#f97316', waterpolo: '#06b6d4', futsal: '#3b82f6',
-                   aussierules: '#eab308', floorball: '#06b6d4', bandy: '#06b6d4', biathlon: '#22c55e', skiing: '#22c55e',
-                   formula1: '#ef4444', nascar: '#ef4444', rugbyunion: '#8b5cf6', rugbyleague: '#8b5cf6', fieldhockey: '#06b6d4',
-                   lacrosse: '#eab308', softball: '#eab308', netball: '#ec4899', pesapallo: '#ef4444', surfing: '#06b6d4',
-                   sailing: '#06b6d4', rowing: '#06b6d4', canoeing: '#06b6d4', triathlon: '#22c55e', tabletennis: '#22c55e',
-                   badminton: '#22c55e', squash: '#22c55e', racquetball: '#22c55e', polo: '#eab308', chess: '#a855f7',
-                   archery: '#ef4444', shooting: '#ef4444', weightlifting: '#6b7280', gymnastics: '#ec4899', athletics: '#f97316',
-                   swimming: '#06b6d4', diving: '#06b6d4', equestrian: '#eab308', fencing: '#a855f7', judo: '#6b7280',
-                   taekwondo: '#6b7280', karate: '#6b7280', wrestling: '#6b7280', kickboxing: '#ef4444', muaythai: '#ef4444',
-                   sumo: '#6b7280', brazilianjiujitsu: '#6b7280', parkour: '#f97316', climbing: '#22c55e', skateboarding: '#ec4899',
-                   snowboarding: '#22c55e', curling: '#06b6d4', bobsleigh: '#06b6d4', luge: '#06b6d4', skeleton: '#a855f7',
-                   skijumping: '#22c55e', alpine: '#22c55e', crosscountry: '#22c55e', freestyle: '#22c55e', nordiccombined: '#22c55e',
-                   shorttrack: '#06b6d4', speedskating: '#06b6d4', figure: '#ec4899', synchronizedswimming: '#06b6d4', marathon: '#f97316',
-                   race: '#ef4444', horseracing: '#eab308', dogracing: '#a855f7', camelracing: '#eab308', greyhound: '#a855f7',
-                   harness: '#eab308', trotting: '#eab308', endurance: '#eab308', rally: '#ef4444', motogp: '#ef4444',
-                   superbike: '#ef4444', motocross: '#ef4444', atv: '#f97316', truck: '#f97316', tractor: '#f97316',
-                   drifter: '#ef4444', drag: '#ef4444', karting: '#ef4444', speedway: '#ef4444', grasstrack: '#ef4444',
-                   ice_racing: '#06b6d4', snowmobile: '#06b6d4', jetboat: '#06b6d4', powerboat: '#06b6d4', yachting: '#06b6d4',
-                   windsurfing: '#06b6d4', kitesurfing: '#06b6d4', wakeboarding: '#06b6d4', waterskiing: '#06b6d4',
-                   paddleboarding: '#06b6d4', kayaking: '#06b6d4', rafting: '#06b6d4', fishing: '#22c55e', hunting: '#22c55e',
-                   shooting_sports: '#ef4444', billiards: '#22c55e', pool: '#22c55e', carrom: '#22c55e', bocce: '#22c55e',
-                   petanque: '#22c55e', boules: '#22c55e', croquet: '#22c55e', shuffleboard: '#22c55e', horseshoes: '#22c55e',
-                   discgolf: '#22c55e', ultimate: '#22c55e', kabaddi: '#ef4444', sepaktakraw: '#3b82f6', wushu: '#ef4444',
-                   sambo: '#ef4444', pankration: '#ef4444', bareknuckle: '#ef4444', lethwei: '#ef4444'
+                   aussierules: '#eab308', tabletennis: '#22c55e', badminton: '#22c55e', athletics: '#f97316',
+                   swimming: '#06b6d4', horseracing: '#eab308', wrestling: '#6b7280', kabaddi: '#ef4444'
                };
                const mapped = response.data.filter(s => s.active).map(s => {
                    const key = s.key || 'unknown';
                    const baseKey = key.split('_')[0];
                    return {
                        id: baseKey,
-                       name: s.title || s.group || key.replace(/_/g, ' ').replace(/\w/g, l => l.toUpperCase()),
+                       name: s.title || s.group || key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
                        icon: iconMap[baseKey] || 'fa-trophy',
                        color: colorMap[baseKey] || '#3b82f6',
                        key: key,
@@ -552,8 +574,6 @@
            { id: 'waterpolo', name: 'Water Polo', icon: 'fa-water', color: '#06b6d4' },
            { id: 'futsal', name: 'Futsal', icon: 'fa-futbol', color: '#3b82f6' },
            { id: 'aussierules', name: 'Aussie Rules', icon: 'fa-football', color: '#eab308' },
-           { id: 'floorball', name: 'Floorball', icon: 'fa-hockey-puck', color: '#06b6d4' },
-           { id: 'formula1', name: 'Formula 1', icon: 'fa-flag-checkered', color: '#ef4444' },
            { id: 'tabletennis', name: 'Table Tennis', icon: 'fa-table-tennis-paddle-ball', color: '#22c55e' },
            { id: 'badminton', name: 'Badminton', icon: 'fa-feather', color: '#22c55e' },
            { id: 'athletics', name: 'Athletics', icon: 'fa-person-running', color: '#f97316' },
@@ -598,17 +618,7 @@
            { name: 'Ligue 1', flag: 'https://flagcdn.com/w20/fr.png', league: 'Ligue 1', country: 'fr' },
            { name: 'Europa League', flag: 'https://flagcdn.com/w20/eu.png', league: 'Europa League', country: 'eu' },
            { name: 'NFL', flag: 'https://flagcdn.com/w20/us.png', league: 'NFL', country: 'us' },
-           { name: 'ATP Tour', flag: 'https://flagcdn.com/w20/gb-eng.png', league: 'ATP Tour', country: 'gb-eng' },
-           { name: 'La Liga 2', flag: 'https://flagcdn.com/w20/es.png', league: 'Segunda División', country: 'es' },
-           { name: 'Serie B', flag: 'https://flagcdn.com/w20/it.png', league: 'Serie B', country: 'it' },
-           { name: 'Bundesliga 2', flag: 'https://flagcdn.com/w20/de.png', league: '2. Bundesliga', country: 'de' },
-           { name: 'Ligue 2', flag: 'https://flagcdn.com/w20/fr.png', league: 'Ligue 2', country: 'fr' },
-           { name: 'Eredivisie', flag: 'https://flagcdn.com/w20/nl.png', league: 'Eredivisie', country: 'nl' },
-           { name: 'Primeira Liga', flag: 'https://flagcdn.com/w20/pt.png', league: 'Primeira Liga', country: 'pt' },
-           { name: 'Belgian Pro', flag: 'https://flagcdn.com/w20/be.png', league: 'Belgian Pro League', country: 'be' },
-           { name: 'Scottish Prem', flag: 'https://flagcdn.com/w20/gb-sct.png', league: 'Scottish Premiership', country: 'gb-sct' },
-           { name: 'Turkish Süper', flag: 'https://flagcdn.com/w20/tr.png', league: 'Süper Lig', country: 'tr' },
-           { name: 'Russian Prem', flag: 'https://flagcdn.com/w20/ru.png', league: 'Russian Premier League', country: 'ru' }
+           { name: 'ATP Tour', flag: 'https://flagcdn.com/w20/gb-eng.png', league: 'ATP Tour', country: 'gb-eng' }
        ];
        res.json({ success: true, competitions, source: 'fallback' });
    });
@@ -663,7 +673,6 @@
        try {
            const now = new Date();
            const matches = await Match.find({ apiId: { $exists: true }, status: { $in: ['upcoming', 'live'] } }).sort({ startTime: 1 }).limit(500);
-   
            let formatted = matches.map(m => {
                const obj = m.toObject();
                obj.id = m._id.toString();
@@ -680,7 +689,6 @@
                obj.country = m.country || 'gb-eng';
                return obj;
            });
-   
            formatted = formatted.map(m => enrichMatchWithFlags(m));
            res.json({ success: true, matches: formatted });
        } catch (err) { 
@@ -819,14 +827,13 @@
    /* =========================================================
       WALLET, DEPOSIT & WITHDRAWAL (M-PESA ONLY)
       ========================================================= */
-   app.post('/api/deposit', async (req, res) => {
+   app.post('/api/deposit', authenticate, async (req, res) => {
        try {
-           const { userPhone, method } = req.body;
-           const amount = parseFloat(req.body.amount);
+           const { amount } = req.body;
+           const userPhone = req.user.phone;
+           const parsedAmount = parseFloat(amount);
            if (!userPhone) return res.status(400).json({ success: false, message: 'Phone required.' });
-           if (isNaN(amount) || amount < 10) return res.status(400).json({ success: false, message: 'Minimum deposit KES 10.' });
-           const user = await User.findOne({ phone: userPhone.replace(/\D/g, '') });
-           if (!user) return res.status(404).json({ success: false, message: 'Account not found.' });
+           if (isNaN(parsedAmount) || parsedAmount < 200) return res.status(400).json({ success: false, message: 'Minimum deposit KES 200.' });
    
            let fp = userPhone.replace(/\D/g, '');
            if (fp.startsWith('0')) fp = '254' + fp.slice(1);
@@ -836,9 +843,9 @@
    
            const ref = 'DEP'+Date.now();
            const payload = {
-               api_key: process.env.MEGAPAY_API_KEY || 'MGPYCVoPXv2P',
-               email: process.env.MEGAPAY_EMAIL || 'gleah6423@gmail.com',
-               amount: amount, 
+               api_key: MEGAPAY_API_KEY,
+               email: MEGAPAY_EMAIL,
+               amount: parsedAmount, 
                msisdn: fp,
                callback_url: `${process.env.APP_URL || 'https://api.betwinn.co.ke'}/api/megapay/webhook`,
                description: 'BetWinn Deposit', 
@@ -855,8 +862,8 @@
                return res.status(502).json({ success: false, message: 'Payment gateway failed to send STK push.' });
            }
    
-           await Transaction.create({ refId: ref, userId: user._id, userPhone: user.phone, type: 'Deposit', method: 'M-Pesa', amount, currency: user.currency || 'KES', status: 'Pending' });
-           res.json({ success: true, message: 'STK Push sent! Check your phone.', newBalance: user.balance, refId: ref });
+           await Transaction.create({ refId: ref, userId: req.user._id, userPhone: req.user.phone, type: 'Deposit', method: 'M-Pesa', amount: parsedAmount, currency: req.user.currency || 'KES', status: 'Pending' });
+           res.json({ success: true, message: 'STK Push sent! Check your phone.', newBalance: req.user.balance, refId: ref });
        } catch (error) { 
            console.error("Deposit error:", error.message);
            res.status(500).json({ success: false, message: 'Internal error during deposit.' }); 
@@ -886,17 +893,37 @@
        try {
            const { amount, accountDetails } = req.body;
            const user = await User.findById(req.user._id);
-           if (!user || user.balance < amount) return res.status(400).json({ success: false, message: 'Insufficient balance.' });
+           if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
+           const parsedAmount = parseFloat(amount);
+           if (isNaN(parsedAmount) || parsedAmount <= 0) return res.status(400).json({ success: false, message: 'Invalid amount.' });
+           if (user.balance < parsedAmount) return res.status(400).json({ success: false, message: 'Insufficient balance.' });
            if (!accountDetails) return res.status(400).json({ success: false, message: 'M-Pesa number required.' });
    
-           user.balance -= parseFloat(amount); 
+           user.balance -= parsedAmount; 
            await user.save();
-           await Transaction.create({ userId: user._id, type: 'Withdrawal', amount, currency: user.currency || 'KES', status: 'Pending', method: 'M-Pesa' });
-           sendTelegramMessage(`💸 <b>BETWINN WITHDRAWAL</b>\n👤 ${user.username}\n📱 ${accountDetails}\n💰 ${amount} ${user.currency || 'KES'}`);
+           await Transaction.create({ userId: user._id, type: 'Withdrawal', amount: -parsedAmount, currency: user.currency || 'KES', status: 'Pending', method: 'M-Pesa', userPhone: accountDetails });
+           sendTelegramMessage(`💸 <b>BETWINN WITHDRAWAL</b>\n👤 ${user.username}\n📱 ${accountDetails}\n💰 ${parsedAmount} ${user.currency || 'KES'}`);
            res.json({ success: true, message: 'Withdrawal requested.', balance: user.balance });
        } catch (err) { 
            console.error("Withdrawal error:", err.message);
            res.status(500).json({ success: false, message: 'Withdrawal failed.' }); 
+       }
+   });
+   
+   app.post('/api/wallet/withdraw-fee', authenticate, async (req, res) => {
+       try {
+           const { amount } = req.body;
+           const user = await User.findById(req.user._id);
+           if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
+           const fee = parseFloat((amount * 0.15).toFixed(2));
+           if (user.balance < fee) return res.status(400).json({ success: false, message: 'Insufficient balance for odds fee.' });
+   
+           user.balance -= fee;
+           await user.save();
+           await Transaction.create({ userId: user._id, type: 'Withdrawal Fee', amount: -fee, currency: user.currency || 'KES', status: 'Completed', method: 'M-Pesa' });
+           res.json({ success: true, fee, newBalance: user.balance, message: `Odds fee of KES ${fee} paid.` });
+       } catch (err) {
+           res.status(500).json({ success: false, message: 'Fee payment failed.' });
        }
    });
    
@@ -910,7 +937,7 @@
       ========================================================= */
    app.post('/api/admin/login', rateLimit({ windowMs: 15*60*1000, max: 10 }), (req, res) => {
        const { password } = req.body;
-       if (password === (process.env.ADMIN_PASS || 'admin@26wins')) {
+       if (password === (process.env.ADMIN_PASS || 'Betwinn@27')) {
            res.json({ message: "Auth successful", token: jwt.sign({ role: 'admin' }, JWT_SECRET, { expiresIn: '24h' }) });
        } else { res.status(401).json({ error: "Invalid credentials" }); }
    });
@@ -930,7 +957,7 @@
                if (txn.type === 'Deposit') { const user = await User.findById(txn.userId); user.balance += txn.amount; await user.save(); await new Notification({ userId: user._id, title: "Deposit Approved", message: `Your deposit of ${txn.amount} ${txn.currency} was approved.` }).save(); }
            } else if (action === 'reject') {
                txn.status = 'Failed';
-               if (txn.type === 'Withdrawal') { const user = await User.findById(txn.userId); user.balance += txn.amount; await user.save(); await new Notification({ userId: user._id, title: "Withdrawal Rejected", message: `Your withdrawal of ${txn.amount} ${txn.currency} was rejected. Funds returned.` }).save(); }
+               if (txn.type === 'Withdrawal') { const user = await User.findById(txn.userId); user.balance += Math.abs(txn.amount); await user.save(); await new Notification({ userId: user._id, title: "Withdrawal Rejected", message: `Your withdrawal of ${Math.abs(txn.amount)} ${txn.currency} was rejected. Funds returned.` }).save(); }
            }
            await txn.save(); res.json({ message: `Transaction ${action}d.` });
        } catch (err) { res.status(500).send(); }
@@ -1005,7 +1032,7 @@
    });
    
    /* =========================================================
-      BACKGROUND WORKERS (SMART SETTLEMENT)
+      BACKGROUND WORKERS (SMART SETTLEMENT & SIMULATION)
       ========================================================= */
    setInterval(async () => {
        try {
@@ -1148,7 +1175,7 @@
                console.error("❌ No active sports available from The-Odds-API");
                return;
            }
-           console.log(`📋 Fetching odds for ${sportsToFetch.length} sports:`, sportsToFetch.slice(0,20).join(', ') + (sportsToFetch.length>20?'...':''));
+           console.log(`📋 Fetching odds for ${sportsToFetch.length} sports`);
    
            let allApiMatches = [];
            for (const sport of sportsToFetch) {
@@ -1161,7 +1188,7 @@
                } catch (e) {
                    const msg = e.response?.data?.message || e.response?.data || e.message;
                    if (msg?.includes?.('Unknown sport') || msg?.includes?.('does not exist')) {
-                       console.warn(`⚠️ Skipping ${sport}: not available on The-Odds-API`);
+                       console.warn(`⚠️ Skipping ${sport}: not available`);
                    } else if (e.response?.status === 403) {
                        console.error(`❌ ${sport}: API key invalid or quota exceeded (403)`);
                    } else {
@@ -1232,7 +1259,6 @@
                const cc = getCountryCodeFromSportKey(match.sport_key);
                const status = diffMins >= 0 && diffMins <= 115 ? 'live' : 'upcoming';
    
-               // Count actual markets from bookmakers
                let marketCount = 0;
                if (match.bookmakers && match.bookmakers[0] && match.bookmakers[0].markets) {
                    marketCount = match.bookmakers[0].markets.length;
