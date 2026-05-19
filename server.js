@@ -119,6 +119,8 @@
        matchObj.awayLogo = awayFlags.logo;
        matchObj.leagueFlag = `https://flagcdn.com/w40/${cc}.png`;
        matchObj.country = cc;
+       matchObj.home = matchObj.homeTeam || matchObj.home || 'Home';
+       matchObj.away = matchObj.awayTeam || matchObj.away || 'Away';
        return matchObj;
    }
    
@@ -345,14 +347,17 @@
       ========================================================= */
    app.post('/api/auth/register', authLimiter, async (req, res, next) => {
        try {
-           const { phone, password } = req.body;
-           if (!phone || !password) return res.status(400).json({ success: false, message: 'Phone and password required.' });
+           console.log('Register body:', req.body);
+           const { phone, password } = req.body || {};
+           if (!phone) return res.status(400).json({ success: false, message: 'Phone is required.' });
+           if (!password) return res.status(400).json({ success: false, message: 'Password is required.' });
            if (password.length < 6) return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
    
-           const cleanPhone = phone.replace(/\D/g, '');
-           if (cleanPhone.length < 9) return res.status(400).json({ success: false, message: 'Invalid phone number.' });
+           const cleanPhone = String(phone).replace(/\D/g, '');
+           if (cleanPhone.length < 9) return res.status(400).json({ success: false, message: 'Invalid phone number. Minimum 9 digits required.' });
    
-           if (await User.findOne({ phone: cleanPhone })) return res.status(400).json({ success: false, message: 'Phone already registered.' });
+           const existing = await User.findOne({ phone: cleanPhone });
+           if (existing) return res.status(400).json({ success: false, message: 'Phone already registered.' });
    
            const isKenyan = cleanPhone.startsWith('254') || (cleanPhone.length === 10 && (cleanPhone.startsWith('07') || cleanPhone.startsWith('01')));
            const currency = isKenyan ? 'KES' : 'USD';
@@ -757,20 +762,21 @@
    
            const tracked = await Promise.all(selections.map(async s => {
                let st = s.startTime ? new Date(s.startTime) : null;
-               if (s.matchId && mongoose.Types.ObjectId.isValid(s.matchId)) {
+               const mid = s.matchId || s.id || 'unknown';
+               if (mid && mongoose.Types.ObjectId.isValid(mid)) {
                    try {
-                       const dbm = await Match.findById(s.matchId).select('startTime');
+                       const dbm = await Match.findById(mid).select('startTime');
                        if (dbm && dbm.startTime) st = dbm.startTime;
                    } catch(e) {}
                }
                if (!st) st = new Date(Date.now() + 2*60*60*1000);
                return { 
-                   matchId: s.matchId || s.id || 'unknown', 
+                   matchId: mid, 
                    match: s.match || s.title || 'Unknown Match', 
                    pick: s.pick, 
                    selection: s.selection || s.pick, 
                    marketType: s.marketType || '1x2', 
-                   odds: parseFloat(s.odds)||0, 
+                   odds: parseFloat(s.odds || s.odd)||0, 
                    startTime: st, 
                    status: 'Open', 
                    score: null, 
@@ -813,10 +819,24 @@
    
    app.post('/api/bets/save-code', async (req, res) => {
        try {
-           const { code, legs, stake, totalOdds, potentialReturn, currency } = req.body;
-           await BookingSlip.findOneAndUpdate({ code: code.toUpperCase() }, { code: code.toUpperCase(), legs, stake, totalOdds, potentialReturn, currency }, { upsert: true, new: true });
+           const { code, legs, stake, totalOdds, potentialReturn, currency } = req.body || {};
+           if (!code || !Array.isArray(legs)) return res.status(400).json({ success: false, message: 'Code and legs required.' });
+           const normalizedLegs = legs.map(l => ({
+               matchId: l.matchId || l.id || 'unknown',
+               match: l.match || l.title || 'Unknown',
+               pick: l.pick,
+               selection: l.selection || l.pick,
+               marketType: l.marketType || '1x2',
+               odds: parseFloat(l.odds || l.odd)||0,
+               startTime: l.startTime ? new Date(l.startTime) : null
+           }));
+           await BookingSlip.findOneAndUpdate(
+               { code: code.toUpperCase() }, 
+               { code: code.toUpperCase(), legs: normalizedLegs, stake, totalOdds, potentialReturn, currency }, 
+               { upsert: true, new: true }
+           );
            res.json({ success: true, message: 'Code saved.' });
-       } catch (err) { res.status(500).send(); }
+       } catch (err) { console.error('Save code error:', err); res.status(500).json({ success: false, message: err.message }); }
    });
    
    app.get('/api/bets/code/:code', async (req, res) => {
@@ -829,10 +849,11 @@
       ========================================================= */
    app.post('/api/deposit', authenticate, async (req, res) => {
        try {
-           const { amount } = req.body;
-           const userPhone = req.user.phone;
+           const { amount, userPhone: bodyPhone } = req.body || {};
+           const userPhone = req.user?.phone || bodyPhone;
+           console.log('Deposit attempt:', { userPhone, amount, userId: req.user?._id });
            const parsedAmount = parseFloat(amount);
-           if (!userPhone) return res.status(400).json({ success: false, message: 'Phone required.' });
+           if (!userPhone) return res.status(400).json({ success: false, message: 'User phone not found. Please re-login.' });
            if (isNaN(parsedAmount) || parsedAmount < 200) return res.status(400).json({ success: false, message: 'Minimum deposit KES 200.' });
    
            let fp = userPhone.replace(/\D/g, '');
@@ -891,7 +912,7 @@
    
    app.post('/api/wallet/withdraw', authenticate, async (req, res) => {
        try {
-           const { amount, accountDetails } = req.body;
+           const { amount, accountDetails, userPhone: bodyPhone } = req.body || {};
            const user = await User.findById(req.user._id);
            if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
            const parsedAmount = parseFloat(amount);
@@ -969,10 +990,13 @@
            const enriched = matches.map(m => {
                const obj = m.toObject();
                obj.id = m._id.toString();
+               if (!obj.oddsArr && obj.odds) {
+                   obj.oddsArr = [obj.odds['1'], obj.odds['X'], obj.odds['2']].filter(Boolean);
+               }
                return enrichMatchWithFlags(obj);
            });
            res.json(enriched);
-       } catch (err) { res.status(500).send(); }
+       } catch (err) { console.error('Admin matches error:', err); res.status(500).json({ error: err.message }); }
    });
    
    app.post('/api/admin/matches', verifyAdminToken, async (req, res) => {
