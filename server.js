@@ -1249,10 +1249,17 @@
            }
            const match = await Match.findById(req.params.id);
            if (!match) return res.status(404).json({ error: "Match not found." });
-           const now = new Date().getTime(); const start = new Date(match.startTime).getTime(); const elapsed = now - start; const twoHours = 2*60*60*1000;
-           if (elapsed < 0) { updateData.status = 'upcoming'; updateData.isLive = false; }
-           else if (elapsed >= 0 && elapsed < twoHours) { updateData.status = 'live'; updateData.isLive = true; }
-           else { if (isLive !== undefined) updateData.isLive = isLive; if (status !== undefined) updateData.status = status; }
+           // If admin sets a final result, auto-mark as completed unless explicitly overridden
+           const isSettingFinalResult = finalScore || (result && (typeof result === 'string' || (typeof result === 'object' && result !== null && (result.homeGoals !== undefined || result.correctScore))));
+           if (isSettingFinalResult && status === undefined && isLive === undefined) {
+               updateData.status = 'completed';
+               updateData.isLive = false;
+           } else {
+               const now = new Date().getTime(); const start = new Date(match.startTime).getTime(); const elapsed = now - start; const twoHours = 2*60*60*1000;
+               if (elapsed < 0) { updateData.status = 'upcoming'; updateData.isLive = false; }
+               else if (elapsed >= 0 && elapsed < twoHours) { updateData.status = 'live'; updateData.isLive = true; }
+               else { if (isLive !== undefined) updateData.isLive = isLive; if (status !== undefined) updateData.status = status; }
+           }
            const updated = await Match.findByIdAndUpdate(req.params.id, updateData, { new: true });
            res.json({ message: "Result updated.", match: updated });
        } catch (err) { res.status(500).send(); }
@@ -1279,7 +1286,8 @@
                for (let leg of bet.selections) {
                    if (leg.status !== 'Open') { if (leg.status === 'Lost') hasLost = true; continue; }
                    const settlementTime = new Date(new Date(leg.startTime).getTime() + (2*60*60*1000));
-                   if (now < settlementTime) { allSettled = false; continue; }
+                   const canSettle = (matchResult && matchResult.status === 'completed') || now >= settlementTime;
+                   if (!canSettle) { allSettled = false; continue; }
                    let matchResult = null;
                    try { 
                        if (mongoose.Types.ObjectId.isValid(leg.matchId)) matchResult = await Match.findById(leg.matchId); 
