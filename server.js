@@ -47,6 +47,7 @@
        allowedHeaders: ['Content-Type', 'Authorization']
    }));
    app.use(express.json({ limit: '10mb' }));
+   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
    
    app.use((req, res, next) => {
        if (req.body) sanitizeObject(req.body);
@@ -286,7 +287,9 @@
    function generateCrashPoint() {
        const r = Math.random();
        if (r < 0.06) return 1.00;
-       return parseFloat((1 + Math.pow(Math.E, 0.06 * (Math.random() * 30 + 5)) / 100).toFixed(2));
+       const exponent = 0.06 * (Math.random() * 30 + 5);
+       const value = Math.pow(Math.E, exponent);
+       return parseFloat(value.toFixed(2));
    }
    
    function startAviatorRound() {
@@ -347,11 +350,16 @@
       ========================================================= */
    app.post('/api/auth/register', authLimiter, async (req, res, next) => {
        try {
-           console.log('Register body:', req.body);
-           const { phone, password } = req.body || {};
-           if (!phone) return res.status(400).json({ success: false, message: 'Phone is required.' });
-           if (!password) return res.status(400).json({ success: false, message: 'Password is required.' });
-           if (password.length < 6) return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
+           console.log('Register raw body:', JSON.stringify(req.body));
+           if (!req.body) {
+               return res.status(400).json({ success: false, message: 'Request body is empty. Check Content-Type header.' });
+           }
+           const phone = req.body.phone;
+           const password = req.body.password;
+   
+           if (!phone) return res.status(400).json({ success: false, message: 'Phone is required.', received: Object.keys(req.body) });
+           if (!password) return res.status(400).json({ success: false, message: 'Password is required.', received: Object.keys(req.body) });
+           if (String(password).length < 6) return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
    
            const cleanPhone = String(phone).replace(/\D/g, '');
            if (cleanPhone.length < 9) return res.status(400).json({ success: false, message: 'Invalid phone number. Minimum 9 digits required.' });
@@ -402,8 +410,11 @@
    
    app.post('/api/auth/login', async (req, res, next) => {
        try {
-           const { identifier, password } = req.body;
-           if (!identifier || !password) return res.status(400).json({ success: false, message: 'Identifier and password required.' });
+           console.log('Login raw body:', JSON.stringify(req.body));
+           if (!req.body) return res.status(400).json({ success: false, message: 'Request body is empty.' });
+           const identifier = req.body.identifier;
+           const password = req.body.password;
+           if (!identifier || !password) return res.status(400).json({ success: false, message: 'Identifier and password required.', received: Object.keys(req.body || {}) });
    
            const digitsOnly = identifier.replace(/\D/g, '');
            const user = await User.findOne({ 
@@ -986,7 +997,8 @@
    
    app.get('/api/admin/matches', verifyAdminToken, async (req, res) => {
        try {
-           const matches = await Match.find().sort({ startTime: -1 }).limit(500);
+           // Only show upcoming and live matches (not completed) for easy result fixing
+           const matches = await Match.find({ status: { $in: ['upcoming', 'live'] } }).sort({ startTime: 1 }).limit(500);
            const enriched = matches.map(m => {
                const obj = m.toObject();
                obj.id = m._id.toString();
@@ -1343,6 +1355,7 @@
            app.listen(PORT, () => { 
                console.log(`BetWinn API running on port ${PORT}`); 
                console.log('✅ All routes registered');
+               console.log('Routes: /api/auth/register, /api/auth/login, /api/deposit, /api/wallet/withdraw, /api/wallet/withdraw-fee, /api/admin/*');
            });
        })
        .catch(err => { console.error('MongoDB connection failed:', err); process.exit(1); });
