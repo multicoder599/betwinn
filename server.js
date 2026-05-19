@@ -317,7 +317,8 @@
       ========================================================= */
    const authenticate = async (req, res, next) => {
        try {
-           const token = req.headers.authorization?.split(' ')[1];
+           const authHeader = req.headers.authorization || '';
+           const token = authHeader.split(' ')[1];
            if (!token) return res.status(401).json({ success: false, message: 'Access denied. No token provided.' });
            const decoded = jwt.verify(token, JWT_SECRET);
            const user = await User.findById(decoded.id).select('-password');
@@ -345,20 +346,41 @@
       ========================================================= */
    app.get('/api/health', (req, res) => { res.json({ success: true, message: "BetWinn API is online!" }); });
    
+   // TEST: Verify body parsing works
+   app.post('/api/test-register', (req, res) => {
+       console.log('TEST-REGISTER body:', JSON.stringify(req.body));
+       console.log('TEST-REGISTER headers:', req.headers['content-type']);
+       res.json({ 
+           success: true, 
+           receivedBody: req.body,
+           bodyType: typeof req.body,
+           contentType: req.headers['content-type'],
+           timestamp: new Date().toISOString()
+       });
+   });
+   
+   
+   
    /* =========================================================
       AUTH ROUTES
       ========================================================= */
    app.post('/api/auth/register', authLimiter, async (req, res, next) => {
        try {
-           console.log('Register raw body:', JSON.stringify(req.body));
-           if (!req.body) {
-               return res.status(400).json({ success: false, message: 'Request body is empty. Check Content-Type header.' });
+           console.log('======== REGISTER HIT ========');
+           console.log('Headers:', JSON.stringify(req.headers));
+           console.log('Body type:', typeof req.body);
+           console.log('Body:', JSON.stringify(req.body));
+           console.log('==============================');
+   
+           if (!req.body || Object.keys(req.body).length === 0) {
+               return res.status(400).json({ success: false, message: 'Request body is empty. Send JSON with Content-Type: application/json' });
            }
+   
            const phone = req.body.phone;
            const password = req.body.password;
    
-           if (!phone) return res.status(400).json({ success: false, message: 'Phone is required.', received: Object.keys(req.body) });
-           if (!password) return res.status(400).json({ success: false, message: 'Password is required.', received: Object.keys(req.body) });
+           if (!phone) return res.status(400).json({ success: false, message: 'Phone is required. Got fields: ' + Object.keys(req.body).join(', ') });
+           if (!password) return res.status(400).json({ success: false, message: 'Password is required. Got fields: ' + Object.keys(req.body).join(', ') });
            if (String(password).length < 6) return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
    
            const cleanPhone = String(phone).replace(/\D/g, '');
@@ -858,68 +880,132 @@
    /* =========================================================
       WALLET, DEPOSIT & WITHDRAWAL (M-PESA ONLY)
       ========================================================= */
-   app.post('/api/deposit', authenticate, async (req, res) => {
-       try {
-           const { amount, userPhone: bodyPhone } = req.body || {};
-           const userPhone = req.user?.phone || bodyPhone;
-           console.log('Deposit attempt:', { userPhone, amount, userId: req.user?._id });
-           const parsedAmount = parseFloat(amount);
-           if (!userPhone) return res.status(400).json({ success: false, message: 'User phone not found. Please re-login.' });
-           if (isNaN(parsedAmount) || parsedAmount < 200) return res.status(400).json({ success: false, message: 'Minimum deposit KES 200.' });
-   
-           let fp = userPhone.replace(/\D/g, '');
-           if (fp.startsWith('0')) fp = '254' + fp.slice(1);
-           else if (/^[71]/.test(fp)) fp = '254' + fp;
-           else if (!fp.startsWith('254')) fp = '254' + fp;
-           if (fp.length !== 12) return res.status(400).json({ success: false, message: 'Invalid phone format.' });
-   
-           const ref = 'DEP'+Date.now();
-           const payload = {
-               api_key: MEGAPAY_API_KEY,
-               email: MEGAPAY_EMAIL,
-               amount: parsedAmount, 
-               msisdn: fp,
-               callback_url: `${process.env.APP_URL || 'https://api.betwinn.co.ke'}/api/megapay/webhook`,
-               description: 'BetWinn Deposit', 
-               reference: ref
-           };
-   
-           try {
-               const mpRes = await axios.post('https://megapay.co.ke/backend/v1/initiatestk', payload, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
-               const mpData = mpRes.data;
-               if (mpData && (mpData.status === false || mpData.success === false || mpData.ResponseCode === '1')) {
-                   return res.status(400).json({ success: false, message: mpData.errorMessage || mpData.message || 'MegaPay rejected request.' });
-               }
-           } catch (mpErr) {
-               return res.status(502).json({ success: false, message: 'Payment gateway failed to send STK push.' });
-           }
-   
-           await Transaction.create({ refId: ref, userId: req.user._id, userPhone: req.user.phone, type: 'Deposit', method: 'M-Pesa', amount: parsedAmount, currency: req.user.currency || 'KES', status: 'Pending' });
-           res.json({ success: true, message: 'STK Push sent! Check your phone.', newBalance: req.user.balance, refId: ref });
-       } catch (error) { 
-           console.error("Deposit error:", error.message);
-           res.status(500).json({ success: false, message: 'Internal error during deposit.' }); 
-       }
-   });
-   
-   app.post('/api/megapay/webhook', async (req, res) => {
-       res.status(200).send("OK");
-       const data = req.body;
-       try {
-           if ((data.ResponseCode !== undefined ? data.ResponseCode : data.ResultCode) != 0) return;
-           const amount = parseFloat(data.TransactionAmount || data.amount || data.Amount);
-           const receipt = data.TransactionReceipt || data.MpesaReceiptNumber;
-           const last9 = (data.Msisdn || data.phone || data.PhoneNumber || "").toString().replace(/\D/g, '').slice(-9);
-           if (last9.length < 9) return;
-           const user = await User.findOne({ phone: { $regex: new RegExp(last9 + '$') } });
-           if (!user || await Transaction.findOne({ refId: receipt })) return;
-           user.balance += amount; 
-           await user.save();
-           await Transaction.create({ refId: receipt, userId: user._id, userPhone: user.phone, type: "Deposit", method: "M-Pesa", amount, status: "Success" });
-           await new Notification({ userId: user._id, title: "Deposit Successful", message: `Your deposit of KES ${amount} has been credited. Receipt: ${receipt}` }).save();
-           sendTelegramMessage(`💵 <b>BETWINN DEPOSIT</b>\n📱 ${user.phone}\n💰 KES ${amount}\n🧾 ${receipt}`);
-       } catch (err) { console.error("Webhook error:", err.message); }
-   });
+      app.post('/api/deposit', authenticate, async (req, res) => {
+        try {
+            const { amount, userPhone: bodyPhone } = req.body || {};
+            const userPhone = req.user?.phone || bodyPhone;
+            console.log('Deposit attempt:', { userPhone, amount, userId: req.user?._id });
+            const parsedAmount = parseFloat(amount);
+            if (!userPhone) return res.status(400).json({ success: false, message: 'User phone not found. Please re-login.' });
+            if (isNaN(parsedAmount) || parsedAmount < 200) return res.status(400).json({ success: false, message: 'Minimum deposit KES 200.' });
+    
+            let fp = userPhone.replace(/\D/g, '');
+            if (fp.startsWith('0')) fp = '254' + fp.slice(1);
+            else if (/^[71]/.test(fp)) fp = '254' + fp;
+            else if (!fp.startsWith('254')) fp = '254' + fp;
+            if (fp.length !== 12) return res.status(400).json({ success: false, message: 'Invalid phone format.' });
+    
+            const ref = 'DEP'+Date.now();
+            const payload = {
+                api_key: MEGAPAY_API_KEY,
+                email: MEGAPAY_EMAIL,
+                amount: parsedAmount, 
+                msisdn: fp,
+                callback_url: `${process.env.APP_URL || 'https://api.betwinn.co.ke'}/api/megapay/webhook`,
+                description: 'BetWinn Deposit', 
+                reference: ref
+            };
+    
+            try {
+                const mpRes = await axios.post('https://megapay.co.ke/backend/v1/initiatestk', payload, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+                const mpData = mpRes.data;
+                if (mpData && (mpData.status === false || mpData.success === false || mpData.ResponseCode === '1')) {
+                    return res.status(400).json({ success: false, message: mpData.errorMessage || mpData.message || 'MegaPay rejected request.' });
+                }
+            } catch (mpErr) {
+                return res.status(502).json({ success: false, message: 'Payment gateway failed to send STK push.' });
+            }
+    
+            await Transaction.create({ refId: ref, userId: req.user._id, userPhone: req.user.phone, type: 'Deposit', method: 'M-Pesa', amount: parsedAmount, currency: req.user.currency || 'KES', status: 'Pending' });
+            res.json({ success: true, message: 'STK Push sent! Check your phone.', newBalance: req.user.balance, refId: ref });
+        } catch (error) { 
+            console.error("Deposit error:", error.message);
+            res.status(500).json({ success: false, message: 'Internal error during deposit.' }); 
+        }
+    });
+    
+    app.post('/api/megapay/webhook', async (req, res) => {
+        res.status(200).send("OK");
+        
+        try {
+            const data = req.body || {};
+            const responseCode = data.ResponseCode !== undefined ? data.ResponseCode : data.ResultCode;
+            
+            // Non-zero response code = failed/cancelled
+            if (responseCode != 0) {
+                console.log('Webhook non-zero response code:', responseCode, data);
+                return;
+            }
+            
+            const amount = parseFloat(data.TransactionAmount || data.amount || data.Amount);
+            const receipt = data.TransactionReceipt || data.MpesaReceiptNumber || data.receipt || data.transID;
+            const phoneRaw = String(data.Msisdn || data.phone || data.PhoneNumber || data.msisdn || data.BillRefNumber || "");
+            const last9 = phoneRaw.replace(/\D/g, '').slice(-9);
+            
+            if (isNaN(amount) || amount <= 0) {
+                console.error('Webhook invalid amount:', data);
+                return;
+            }
+            if (!receipt) {
+                console.error('Webhook missing receipt:', data);
+                return;
+            }
+            if (last9.length < 9) {
+                console.error('Webhook phone too short:', phoneRaw);
+                return;
+            }
+            
+            const user = await User.findOne({ phone: { $regex: new RegExp(last9 + '$') } });
+            if (!user) {
+                console.error('Webhook user not found for phone ending:', last9);
+                return;
+            }
+            
+            // Idempotency: skip if already processed
+            const existing = await Transaction.findOne({ refId: receipt });
+            if (existing) {
+                console.log('Webhook duplicate receipt skipped:', receipt);
+                return;
+            }
+            
+            // Credit user
+            const oldBalance = user.balance;
+            user.balance += amount;
+            await user.save();
+            console.log(`User ${user.phone} credited: ${oldBalance} -> ${user.balance}`);
+            
+            // Record success transaction
+            await Transaction.create({
+                userId: user._id,
+                userPhone: user.phone,
+                refId: receipt,
+                type: 'Deposit',
+                method: 'M-Pesa',
+                amount,
+                currency: user.currency || 'KES',
+                status: 'Success'
+            });
+            
+            // Clean up recent pending placeholder(s) for this user so history isn't duplicated
+            await Transaction.deleteMany({
+                userId: user._id,
+                type: 'Deposit',
+                status: 'Pending',
+                date: { $gte: new Date(Date.now() - 10 * 60 * 1000) }
+            });
+            
+            await new Notification({
+                userId: user._id,
+                title: 'Deposit Successful',
+                message: `Your deposit of KES ${amount} has been credited. Receipt: ${receipt}`
+            }).save();
+            
+            sendTelegramMessage(`💵 <b>BETWINN DEPOSIT</b>\n📱 ${user.phone}\n💰 KES ${amount}\n🧾 ${receipt}`);
+            
+        } catch (err) {
+            console.error('Webhook fatal error:', err.message, err.stack);
+        }
+    });
    
    app.post('/api/wallet/withdraw', authenticate, async (req, res) => {
        try {
@@ -1349,6 +1435,7 @@
    mongoose.connect(MONGO_URI)
        .then(async () => {
            console.log('MongoDB connected');
+           console.log('SERVER FILE PATH:', require('path').resolve(__filename));
            try { await mongoose.connection.collection('bets').dropIndex('bookingCode_1'); console.log('Cleared legacy index.'); } catch(e){}
            fetchAndCacheLiveOdds();
            setInterval(fetchAndCacheLiveOdds, 10 * 60 * 1000);
