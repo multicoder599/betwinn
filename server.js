@@ -1,5 +1,5 @@
 /* =========================================================
-   BETWINN SERVER.JS (Merged with SportyWins Production Logic)
+   BETWINN SERVER.JS (Production)
    Express + MongoDB + JWT + bcrypt + axios + helmet + rate-limit
    ========================================================= */
 
@@ -19,8 +19,6 @@
    const PORT = process.env.PORT || 3012;
    const JWT_SECRET = process.env.JWT_SECRET || 'betwinn_secret_key_2026';
    const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/betwinn';
-   const API_URL = process.env.NODE_ENV === 'production' ? 'https://api.betwinn.co.ke/api' : `http://localhost:${PORT}/api`;
-   const PARLAY_API_KEY = process.env.PARLAY_API_KEY || '627778f98df49b4c7d459b1760997abd';
    const ODDS_API_KEY = process.env.ODDS_API_KEY || 'e74fb850fc80d42a467adf602d6e0e0b';
    
    /* =========================================================
@@ -73,14 +71,6 @@
        } catch (err) { console.error("Telegram failed:", err.message); }
    };
    
-   const getCryptoAddresses = () => ({
-       Bitcoin: process.env.BTC_ADDRESS || 'bc1q_configure_in_env',
-       USDT: process.env.USDT_ADDRESS || '0x_configure_in_env',
-       USDC: process.env.USDC_ADDRESS || '0x_configure_in_env',
-       Solana: process.env.SOLANA_ADDRESS || 'sol_configure_in_env',
-       Litecoin: process.env.LTC_ADDRESS || 'ltc_configure_in_env'
-   });
-   
    const getTimezoneFromCountry = (countryCode, phone = '') => {
        const map = { KE: 'Africa/Nairobi', UG: 'Africa/Kampala', TZ: 'Africa/Dar_es_Salaam', NG: 'Africa/Lagos', ZA: 'Africa/Johannesburg', GH: 'Africa/Accra', GB: 'Europe/London', US: 'America/New_York', CA: 'America/Toronto', AU: 'Australia/Sydney', IN: 'Asia/Kolkata', DE: 'Europe/Berlin', FR: 'Europe/Paris', ES: 'Europe/Madrid', IT: 'Europe/Rome', BR: 'America/Sao_Paulo', MX: 'America/Mexico_City', AE: 'Asia/Dubai' };
        const p = String(phone).replace(/\D/g, '');
@@ -96,62 +86,61 @@
    };
    
    function getCountryCodeFromSportKey(sportKey) {
-    if (!sportKey) return 'gb';
-    const map = {
-        'soccer_epl': 'gb',           // changed from 'gb-eng'
-        'soccer_spain': 'es',
-        'soccer_italy': 'it',
-        'soccer_germany': 'de',
-        'soccer_france': 'fr',
-        'soccer_uefa': 'eu',          // flagcdn handles 'eu' beautifully
-        'soccer_netherlands': 'nl',
-        'soccer_portugal': 'pt',
-        'soccer_belgium': 'be',
-        'soccer_turkey': 'tr',
-        'soccer_usa': 'us',
-        'soccer_canada': 'ca',
-        'soccer_australia': 'au',
-        'soccer_kenya': 'ke',
-        'soccer_tanzania': 'tz',
-        'soccer_uganda': 'ug',
-        'basketball_nba': 'us',
-        'tennis_atp': 'gb',
-        'tennis_wta': 'gb',
-        'mma_ufc': 'us'
-    };
-    for (const [prefix, code] of Object.entries(map)) {
-        if (sportKey.toLowerCase().startsWith(prefix)) return code;
-    }
-    return 'gb'; // fallback code string
-}
-
-function getTeamFlagUrl(teamName, countryCode) {
-    // Use country flag as base, with team initials overlay concept via ui-avatars for team-specific look
-    const cc = countryCode || 'gb-eng';
-    const encoded = encodeURIComponent(teamName || 'Team');
-    return {
-        flag: `https://flagcdn.com/w40/${cc}.png`,
-        logo: `https://ui-avatars.com/api/?name=${encoded}&background=2563eb&color=fff&size=128&bold=true&font-size=0.4`,
-        svg: `https://flagcdn.com/${cc}.svg`
-    };
-}
-
-function enrichMatchWithFlags(matchObj) {
-    const cc = matchObj.country || getCountryCodeFromSportKey(matchObj.sport_key || matchObj.sport || 'soccer');
-    const home = matchObj.homeTeam || matchObj.home || 'Home';
-    const away = matchObj.awayTeam || matchObj.away || 'Away';
-    const homeFlags = getTeamFlagUrl(home, cc);
-    const awayFlags = getTeamFlagUrl(away, cc);
-    matchObj.homeFlag = homeFlags.flag;
-    matchObj.awayFlag = awayFlags.flag;
-    matchObj.homeLogo = homeFlags.logo;
-    matchObj.awayLogo = awayFlags.logo;
-    matchObj.leagueFlag = `https://flagcdn.com/w40/${cc}.png`;
-    matchObj.country = cc;
-    return matchObj;
-}
-
-function getMatchTimeStr(startTimeStr) {
+       if (!sportKey) return 'gb';
+       const map = {
+           'soccer_epl': 'gb-eng',
+           'soccer_spain': 'es',
+           'soccer_italy': 'it',
+           'soccer_germany': 'de',
+           'soccer_france': 'fr',
+           'soccer_uefa': 'eu',
+           'soccer_netherlands': 'nl',
+           'soccer_portugal': 'pt',
+           'soccer_belgium': 'be',
+           'soccer_turkey': 'tr',
+           'soccer_usa': 'us',
+           'soccer_canada': 'ca',
+           'soccer_australia': 'au',
+           'soccer_kenya': 'ke',
+           'soccer_tanzania': 'tz',
+           'soccer_uganda': 'ug',
+           'basketball_nba': 'us',
+           'tennis_atp': 'gb',
+           'tennis_wta': 'gb',
+           'mma_ufc': 'us'
+       };
+       for (const [prefix, code] of Object.entries(map)) {
+           if (sportKey.toLowerCase().startsWith(prefix)) return code;
+       }
+       return 'gb';
+   }
+   
+   function getTeamFlagUrl(teamName, countryCode) {
+       const cc = countryCode || 'gb-eng';
+       const encoded = encodeURIComponent(teamName || 'Team');
+       return {
+           flag: `https://flagcdn.com/w40/${cc}.png`,
+           logo: `https://ui-avatars.com/api/?name=${encoded}&background=3b82f6&color=fff&size=128&bold=true&font-size=0.4`,
+           svg: `https://flagcdn.com/${cc}.svg`
+       };
+   }
+   
+   function enrichMatchWithFlags(matchObj) {
+       const cc = matchObj.country || getCountryCodeFromSportKey(matchObj.sport_key || matchObj.sport || 'soccer');
+       const home = matchObj.homeTeam || matchObj.home || 'Home';
+       const away = matchObj.awayTeam || matchObj.away || 'Away';
+       const homeFlags = getTeamFlagUrl(home, cc);
+       const awayFlags = getTeamFlagUrl(away, cc);
+       matchObj.homeFlag = homeFlags.flag;
+       matchObj.awayFlag = awayFlags.flag;
+       matchObj.homeLogo = homeFlags.logo;
+       matchObj.awayLogo = awayFlags.logo;
+       matchObj.leagueFlag = `https://flagcdn.com/w40/${cc}.png`;
+       matchObj.country = cc;
+       return matchObj;
+   }
+   
+   function getMatchTimeStr(startTimeStr) {
        if (!startTimeStr) return "";
        const elapsedMs = new Date().getTime() - new Date(startTimeStr).getTime();
        const elapsedMins = Math.floor(elapsedMs / 60000);
@@ -186,9 +175,9 @@ function getMatchTimeStr(startTimeStr) {
       DATABASE MODELS
       ========================================================= */
    const userSchema = new mongoose.Schema({
-       username: { type: String, required: true, unique: true },
+       username: { type: String, required: true, unique: true, sparse: true },
        name: { type: String, default: 'Player' },
-       email: { type: String, required: true, unique: true, lowercase: true },
+       email: { type: String, required: false, unique: true, sparse: true, lowercase: true },
        phone: { type: String, required: true, unique: true },
        password: { type: String, required: true },
        balance: { type: Number, default: 0 },
@@ -230,7 +219,7 @@ function getMatchTimeStr(startTimeStr) {
            doubleChance: { '1x': Number, x2: Number, '12': Number }
        },
        detailedMarkets: { type: mongoose.Schema.Types.Mixed, default: {} },
-       marketsCount: { type: Number, default: 99 },
+       marketsCount: { type: Number, default: 0 },
        featured: { type: Boolean, default: false },
        result: {
            homeGoals: Number, awayGoals: Number, correctScore: String,
@@ -336,55 +325,112 @@ function getMatchTimeStr(startTimeStr) {
       ========================================================= */
    app.post('/api/auth/register', authLimiter, async (req, res, next) => {
        try {
-           const { username, name, email, phone, password } = req.body;
-           if (!username || !phone || !password) return res.status(400).json({ success: false, message: 'Missing required fields.' });
-           if (await User.findOne({ username: { $regex: new RegExp('^' + username + '$', 'i') } })) return res.status(400).json({ success: false, message: 'Username taken.' });
-           if (await User.findOne({ email: { $regex: new RegExp('^' + (email || '') + '$', 'i') } })) return res.status(400).json({ success: false, message: 'Email registered.' });
-           if (await User.findOne({ phone })) return res.status(400).json({ success: false, message: 'Phone registered.' });
+           const { phone, password } = req.body;
+           if (!phone || !password) return res.status(400).json({ success: false, message: 'Phone and password required.' });
+           if (password.length < 6) return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
    
            const cleanPhone = phone.replace(/\D/g, '');
-           const isKenyan = phone.startsWith('+254') || cleanPhone.startsWith('254') || (cleanPhone.length === 10 && (cleanPhone.startsWith('07') || cleanPhone.startsWith('01')));
+           if (cleanPhone.length < 9) return res.status(400).json({ success: false, message: 'Invalid phone number.' });
+   
+           if (await User.findOne({ phone: cleanPhone })) return res.status(400).json({ success: false, message: 'Phone already registered.' });
+   
+           const isKenyan = cleanPhone.startsWith('254') || (cleanPhone.length === 10 && (cleanPhone.startsWith('07') || cleanPhone.startsWith('01')));
            const currency = isKenyan ? 'KES' : 'USD';
            const countryCode = isKenyan ? 'KE' : 'US';
            const timezone = getTimezoneFromCountry(countryCode, phone);
+           const username = 'player_' + cleanPhone.slice(-6);
    
-           const user = new User({ username, name: name || username, email: email || `${phone}@betwinn.co.ke`, phone, password: await bcrypt.hash(password, 12), currency, countryCode, timezone });
+           const user = new User({ 
+               username, 
+               name: 'Player', 
+               email: `${cleanPhone}@betwinn.co.ke`, 
+               phone: cleanPhone, 
+               password: await bcrypt.hash(password, 12), 
+               currency, 
+               countryCode, 
+               timezone 
+           });
            await user.save();
    
-           await new Notification({ userId: user._id, title: "Welcome to BetWinn!", message: "Your account is ready. Start winning today!" }).save();
-           sendTelegramMessage(`🎉 <b>NEW BETWINN USER</b>\n👤 ${username}\n📞 ${phone}\n💰 Currency: ${currency}`);
-   
            const token = jwt.sign({ id: user._id, phone: user.phone }, JWT_SECRET, { expiresIn: '7d' });
-           res.status(201).json({ success: true, token, user: { id: user._id, username: user.username, name: user.name, email: user.email, phone: user.phone, balance: user.balance, currency: user.currency, countryCode: user.countryCode, timezone: user.timezone, oddsFormat: user.oddsFormat, cryptoAddresses: getCryptoAddresses() } });
-       } catch (err) { next(err); }
+           res.status(201).json({ 
+               success: true, 
+               token, 
+               user: { 
+                   id: user._id, 
+                   username: user.username, 
+                   name: user.name, 
+                   email: user.email, 
+                   phone: user.phone, 
+                   balance: user.balance, 
+                   currency: user.currency, 
+                   countryCode: user.countryCode, 
+                   timezone: user.timezone, 
+                   oddsFormat: user.oddsFormat 
+               } 
+           });
+       } catch (err) { 
+           console.error("Register error:", err.message);
+           next(err); 
+       }
    });
    
    app.post('/api/auth/login', async (req, res, next) => {
        try {
            const { identifier, password } = req.body;
            if (!identifier || !password) return res.status(400).json({ success: false, message: 'Identifier and password required.' });
+   
            const digitsOnly = identifier.replace(/\D/g, '');
-           const phoneQuery = digitsOnly.length >= 9 ? { $regex: new RegExp(digitsOnly.slice(-9) + '$') } : identifier;
-           const user = await User.findOne({ $or: [{ email: { $regex: new RegExp('^' + identifier + '$', 'i') } }, { username: { $regex: new RegExp('^' + identifier + '$', 'i') } }, { phone: phoneQuery }, { phone: identifier }] });
+           const user = await User.findOne({ 
+               $or: [
+                   { phone: digitsOnly }, 
+                   { phone: identifier },
+                   { username: identifier }
+               ] 
+           });
+   
            if (!user || !(await bcrypt.compare(password, user.password))) return res.status(400).json({ success: false, message: 'Invalid credentials.' });
            const token = jwt.sign({ id: user._id, phone: user.phone }, JWT_SECRET, { expiresIn: '7d' });
-           res.json({ success: true, token, user: { id: user._id, username: user.username, name: user.name, email: user.email, phone: user.phone, balance: user.balance, currency: user.currency, countryCode: user.countryCode, timezone: user.timezone, oddsFormat: user.oddsFormat, cryptoAddresses: getCryptoAddresses() } });
-       } catch (err) { next(err); }
+           res.json({ 
+               success: true, 
+               token, 
+               user: { 
+                   id: user._id, 
+                   username: user.username, 
+                   name: user.name, 
+                   email: user.email, 
+                   phone: user.phone, 
+                   balance: user.balance, 
+                   currency: user.currency, 
+                   countryCode: user.countryCode, 
+                   timezone: user.timezone, 
+                   oddsFormat: user.oddsFormat 
+               } 
+           });
+       } catch (err) { 
+           console.error("Login error:", err.message);
+           next(err); 
+       }
    });
    
    app.get('/api/user', authenticate, async (req, res) => {
        const u = req.user.toObject();
-       u.cryptoAddresses = getCryptoAddresses();
        res.json({ success: true, user: u });
    });
    
    app.get('/api/user/:id/profile', async (req, res) => {
-       try { const user = await User.findById(req.params.id).select('-password'); if (!user) return res.status(404).send(); const u = user.toObject(); u.cryptoAddresses = getCryptoAddresses(); res.json(u); }
+       try { 
+           const user = await User.findById(req.params.id).select('-password'); 
+           if (!user) return res.status(404).send(); 
+           res.json(user); 
+       }
        catch (err) { res.status(500).send(); }
    });
    
    app.get('/api/user/:id/notifications', authenticate, async (req, res) => {
-       try { res.json({ success: true, notifications: await Notification.find({ $or: [{ userId: req.params.id }, { userId: null }] }).sort({ createdAt: -1 }).limit(20) }); }
+       try { 
+           res.json({ success: true, notifications: await Notification.find({ $or: [{ userId: req.params.id }, { userId: null }] }).sort({ createdAt: -1 }).limit(20) }); 
+       }
        catch (err) { res.status(500).send(); }
    });
    
@@ -471,9 +517,9 @@ function getMatchTimeStr(startTimeStr) {
                    const baseKey = key.split('_')[0];
                    return {
                        id: baseKey,
-                       name: s.title || s.group || key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+                       name: s.title || s.group || key.replace(/_/g, ' ').replace(/\w/g, l => l.toUpperCase()),
                        icon: iconMap[baseKey] || 'fa-trophy',
-                       color: colorMap[baseKey] || '#2563eb',
+                       color: colorMap[baseKey] || '#3b82f6',
                        key: key,
                        group: s.group || 'Other',
                        hasOutrights: s.has_outrights || false
@@ -578,7 +624,7 @@ function getMatchTimeStr(startTimeStr) {
            else if (date === 'tomorrow') { const s = new Date(); s.setDate(s.getDate()+1); s.setHours(0,0,0,0); const e = new Date(); e.setDate(e.getDate()+1); e.setHours(23,59,59,999); query.startTime = { $gte: s, $lte: e }; }
            if (search) { query.$or = [{ homeTeam: { $regex: search, $options: 'i' } }, { awayTeam: { $regex: search, $options: 'i' } }, { league: { $regex: search, $options: 'i' } }]; }
    
-           const matches = await Match.find(query).sort({ startTime: 1 }).limit(parseInt(limit)).skip((parseInt(page) - 1) * parseInt(limit)).lean();
+           const matches = await Match.find(query).sort({ startTime: 1 }).limit(parseInt(limit)).skip((parseInt(page) - 1) * parseInt(limit));
            let formatted = matches.map(m => {
                const obj = m.toObject();
                if (m.status === 'live' && m.startTime) {
@@ -591,12 +637,15 @@ function getMatchTimeStr(startTimeStr) {
            });
            formatted = formatted.map(m => enrichMatchWithFlags(m));
            res.json({ success: true, matches: formatted, page: parseInt(page), total: await Match.countDocuments(query) });
-       } catch (err) { next(err); }
+       } catch (err) { 
+           console.error("Matches route error:", err.message);
+           next(err); 
+       }
    });
    
    app.get('/api/matches/featured', async (req, res, next) => {
        try {
-        const matches = await Match.find({ featured: true, status: { $in: ['upcoming', 'live'] } }).limit(10).sort({ startTime: 1 }).lean();
+           const matches = await Match.find({ featured: true, status: { $in: ['upcoming', 'live'] } }).limit(10).sort({ startTime: 1 });
            let formatted = matches.map(m => {
                const obj = m.toObject(); obj.id = m._id.toString();
                if (m.status === 'live' && m.startTime) { obj.score = getDeterministicScore(m._id.toString(), m.startTime.toISOString(), m.result); obj.time = getMatchTimeStr(m.startTime.toISOString()); obj.isLive = true; }
@@ -604,14 +653,17 @@ function getMatchTimeStr(startTimeStr) {
            });
            formatted = formatted.map(m => enrichMatchWithFlags(m));
            res.json({ success: true, matches: formatted });
-       } catch (err) { next(err); }
+       } catch (err) { 
+           console.error("Featured matches error:", err.message);
+           next(err); 
+       }
    });
    
    app.get('/api/live-matches', async (req, res) => {
        try {
            const now = new Date();
-           const matches = await Match.find({ apiId: { $exists: true }, status: { $in: ['upcoming', 'live'] } }).sort({ startTime: 1 }).limit(500).lean();
-
+           const matches = await Match.find({ apiId: { $exists: true }, status: { $in: ['upcoming', 'live'] } }).sort({ startTime: 1 }).limit(500);
+   
            let formatted = matches.map(m => {
                const obj = m.toObject();
                obj.id = m._id.toString();
@@ -623,17 +675,17 @@ function getMatchTimeStr(startTimeStr) {
                obj.home = m.homeTeam;
                obj.away = m.awayTeam;
                obj.odds = [m.odds?.['1']||2.1, m.odds?.['X']||3.1, m.odds?.['2']||2.8];
-               obj.marketCount = m.marketsCount || 50;
+               obj.marketCount = m.marketsCount || 0;
                obj.region = 'Global';
                obj.country = m.country || 'gb-eng';
                return obj;
            });
-
+   
            formatted = formatted.map(m => enrichMatchWithFlags(m));
            res.json({ success: true, matches: formatted });
        } catch (err) { 
-           console.error("Live matches error:", err);
-           res.status(500).json({ error: "Fetch failed." }); 
+           console.error("Live matches error:", err.message);
+           res.status(500).json({ error: "Fetch failed.", detail: err.message }); 
        }
    });
    
@@ -663,7 +715,10 @@ function getMatchTimeStr(startTimeStr) {
                };
            }
            res.json({ success: true, markets });
-       } catch (err) { next(err); }
+       } catch (err) { 
+           console.error("Markets error:", err.message);
+           next(err); 
+       }
    });
    
    /* =========================================================
@@ -677,10 +732,15 @@ function getMatchTimeStr(startTimeStr) {
    app.post('/api/bets/place', authenticate, async (req, res, next) => {
        try {
            let { selections, stake, totalOdds, potentialWin, currency, bookingCode } = req.body;
-           stake = parseFloat(stake); totalOdds = parseFloat(totalOdds);
+   
+           stake = parseFloat(stake); 
+           totalOdds = parseFloat(totalOdds);
+   
            if (isNaN(stake) || stake <= 0) return res.status(400).json({ success: false, message: 'Invalid stake.' });
            if (isNaN(totalOdds) || totalOdds < 1) return res.status(400).json({ success: false, message: 'Invalid odds.' });
+   
            potentialWin = parseFloat((stake * totalOdds).toFixed(2));
+   
            if (!Array.isArray(selections) || selections.length === 0) return res.status(400).json({ success: false, message: 'No selections.' });
    
            const user = await User.findById(req.user._id);
@@ -690,25 +750,52 @@ function getMatchTimeStr(startTimeStr) {
            const tracked = await Promise.all(selections.map(async s => {
                let st = s.startTime ? new Date(s.startTime) : null;
                if (s.matchId && mongoose.Types.ObjectId.isValid(s.matchId)) {
-                   const dbm = await Match.findById(s.matchId).select('startTime');
-                   if (dbm && dbm.startTime) st = dbm.startTime;
+                   try {
+                       const dbm = await Match.findById(s.matchId).select('startTime');
+                       if (dbm && dbm.startTime) st = dbm.startTime;
+                   } catch(e) {}
                }
                if (!st) st = new Date(Date.now() + 2*60*60*1000);
-               return { matchId: s.matchId, match: s.match || s.title, pick: s.pick, selection: s.selection || s.pick, marketType: s.marketType || '1x2', odds: parseFloat(s.odds)||0, startTime: st, status: 'Open', score: null, finalScore: null };
+               return { 
+                   matchId: s.matchId || s.id || 'unknown', 
+                   match: s.match || s.title || 'Unknown Match', 
+                   pick: s.pick, 
+                   selection: s.selection || s.pick, 
+                   marketType: s.marketType || '1x2', 
+                   odds: parseFloat(s.odds)||0, 
+                   startTime: st, 
+                   status: 'Open', 
+                   score: null, 
+                   finalScore: null 
+               };
            }));
    
            const bet = new Bet({
-               userId: user._id, ticketId: 'BW-'+Math.random().toString(36).substring(2,8).toUpperCase(),
-               selections: tracked, stake, totalOdds, potentialWin,
-               currency: currency || user.currency, userTimezone: user.timezone || 'Africa/Nairobi', bookingCode: bookingCode || undefined
+               userId: user._id, 
+               ticketId: 'BW-'+Math.random().toString(36).substring(2,8).toUpperCase(),
+               selections: tracked, 
+               stake, 
+               totalOdds, 
+               potentialWin,
+               currency: currency || user.currency, 
+               userTimezone: user.timezone || 'Africa/Nairobi', 
+               bookingCode: bookingCode || undefined
            });
            await bet.save();
-           user.balance -= stake; user.totalBets += 1; await user.save();
+   
+           user.balance -= stake; 
+           user.totalBets += 1; 
+           await user.save();
    
            await Transaction.create({ userId: user._id, type: 'Bet Placed', amount: -stake, currency: bet.currency, status: 'Completed' });
            sendTelegramMessage(`🎲 <b>NEW BETWINN BET</b>\n👤 ${user.username}\n💰 Stake: ${stake} ${bet.currency}\n🎯 Potential: ${potentialWin} ${bet.currency}`);
+   
            res.json({ success: true, ticketId: bet.ticketId, newBalance: user.balance, bet });
-       } catch (err) { next(err); }
+       } catch (err) { 
+           console.error("Bet placement error:", err.message);
+           console.error(err.stack);
+           res.status(500).json({ success: false, message: err.message || 'Internal server error during bet placement.' });
+       }
    });
    
    app.get('/api/bets/my', authenticate, async (req, res, next) => {
@@ -730,7 +817,7 @@ function getMatchTimeStr(startTimeStr) {
    });
    
    /* =========================================================
-      WALLET, DEPOSIT & WITHDRAWAL
+      WALLET, DEPOSIT & WITHDRAWAL (M-PESA ONLY)
       ========================================================= */
    app.post('/api/deposit', async (req, res) => {
        try {
@@ -738,7 +825,7 @@ function getMatchTimeStr(startTimeStr) {
            const amount = parseFloat(req.body.amount);
            if (!userPhone) return res.status(400).json({ success: false, message: 'Phone required.' });
            if (isNaN(amount) || amount < 10) return res.status(400).json({ success: false, message: 'Minimum deposit KES 10.' });
-           const user = await User.findOne({ phone: userPhone });
+           const user = await User.findOne({ phone: userPhone.replace(/\D/g, '') });
            if (!user) return res.status(404).json({ success: false, message: 'Account not found.' });
    
            let fp = userPhone.replace(/\D/g, '');
@@ -751,9 +838,11 @@ function getMatchTimeStr(startTimeStr) {
            const payload = {
                api_key: process.env.MEGAPAY_API_KEY || 'MGPYCVoPXv2P',
                email: process.env.MEGAPAY_EMAIL || 'gleah6423@gmail.com',
-               amount: amount, msisdn: fp,
+               amount: amount, 
+               msisdn: fp,
                callback_url: `${process.env.APP_URL || 'https://api.betwinn.co.ke'}/api/megapay/webhook`,
-               description: 'BetWinn Deposit', reference: ref
+               description: 'BetWinn Deposit', 
+               reference: ref
            };
    
            try {
@@ -766,9 +855,12 @@ function getMatchTimeStr(startTimeStr) {
                return res.status(502).json({ success: false, message: 'Payment gateway failed to send STK push.' });
            }
    
-           await Transaction.create({ refId: ref, userId: user._id, userPhone: user.phone, type: 'Deposit', method: method || 'M-Pesa', amount, currency: user.currency || 'KES', status: 'Pending' });
+           await Transaction.create({ refId: ref, userId: user._id, userPhone: user.phone, type: 'Deposit', method: 'M-Pesa', amount, currency: user.currency || 'KES', status: 'Pending' });
            res.json({ success: true, message: 'STK Push sent! Check your phone.', newBalance: user.balance, refId: ref });
-       } catch (error) { res.status(500).json({ success: false, message: 'Internal error during deposit.' }); }
+       } catch (error) { 
+           console.error("Deposit error:", error.message);
+           res.status(500).json({ success: false, message: 'Internal error during deposit.' }); 
+       }
    });
    
    app.post('/api/megapay/webhook', async (req, res) => {
@@ -782,32 +874,30 @@ function getMatchTimeStr(startTimeStr) {
            if (last9.length < 9) return;
            const user = await User.findOne({ phone: { $regex: new RegExp(last9 + '$') } });
            if (!user || await Transaction.findOne({ refId: receipt })) return;
-           user.balance += amount; await user.save();
+           user.balance += amount; 
+           await user.save();
            await Transaction.create({ refId: receipt, userId: user._id, userPhone: user.phone, type: "Deposit", method: "M-Pesa", amount, status: "Success" });
            await new Notification({ userId: user._id, title: "Deposit Successful", message: `Your deposit of KES ${amount} has been credited. Receipt: ${receipt}` }).save();
            sendTelegramMessage(`💵 <b>BETWINN DEPOSIT</b>\n📱 ${user.phone}\n💰 KES ${amount}\n🧾 ${receipt}`);
-       } catch (err) {}
-   });
-   
-   app.post('/api/wallet/deposit/manual', authenticate, async (req, res) => {
-       try {
-           const { amount, currency, method, proofSubmitted } = req.body;
-           await Transaction.create({ userId: req.user._id, type: 'Deposit', method, amount, currency, status: 'Pending', proofUrl: proofSubmitted ? 'Proof Submitted' : 'Pending' });
-           sendTelegramMessage(`⏳ <b>BETWINN MANUAL DEPOSIT</b>\n👤 ${req.user.username}\n💳 ${method}\n💰 ${amount} ${currency}`);
-           res.json({ success: true, message: 'Deposit submitted for review.' });
-       } catch (err) { res.status(500).send(); }
+       } catch (err) { console.error("Webhook error:", err.message); }
    });
    
    app.post('/api/wallet/withdraw', authenticate, async (req, res) => {
        try {
-           const { amount, currency, accountDetails, method } = req.body;
+           const { amount, accountDetails } = req.body;
            const user = await User.findById(req.user._id);
            if (!user || user.balance < amount) return res.status(400).json({ success: false, message: 'Insufficient balance.' });
-           user.balance -= parseFloat(amount); await user.save();
-           await Transaction.create({ userId: user._id, type: 'Withdrawal', amount, currency, status: 'Pending', method: method || 'M-Pesa' });
-           sendTelegramMessage(`💸 <b>BETWINN WITHDRAWAL</b>\n👤 ${user.username}\n💳 ${accountDetails}\n💰 ${amount} ${currency}`);
+           if (!accountDetails) return res.status(400).json({ success: false, message: 'M-Pesa number required.' });
+   
+           user.balance -= parseFloat(amount); 
+           await user.save();
+           await Transaction.create({ userId: user._id, type: 'Withdrawal', amount, currency: user.currency || 'KES', status: 'Pending', method: 'M-Pesa' });
+           sendTelegramMessage(`💸 <b>BETWINN WITHDRAWAL</b>\n👤 ${user.username}\n📱 ${accountDetails}\n💰 ${amount} ${user.currency || 'KES'}`);
            res.json({ success: true, message: 'Withdrawal requested.', balance: user.balance });
-       } catch (err) { res.status(500).send(); }
+       } catch (err) { 
+           console.error("Withdrawal error:", err.message);
+           res.status(500).json({ success: false, message: 'Withdrawal failed.' }); 
+       }
    });
    
    app.get('/api/wallet/transactions/:userId', authenticate, async (req, res) => {
@@ -923,7 +1013,7 @@ function getMatchTimeStr(startTimeStr) {
            await Match.updateMany({ status: 'upcoming', startTime: { $lte: now } }, { $set: { status: 'live', isLive: true } });
            const twoHoursAgo = new Date(now.getTime() - (2*60*60*1000));
            await Match.updateMany({ status: 'live', startTime: { $lte: twoHoursAgo } }, { $set: { status: 'completed', isLive: false } });
-       } catch (err) {}
+       } catch (err) { console.error("Status update error:", err.message); }
    }, 60000);
    
    setInterval(async () => {
@@ -937,84 +1027,113 @@ function getMatchTimeStr(startTimeStr) {
                    const settlementTime = new Date(new Date(leg.startTime).getTime() + (2*60*60*1000));
                    if (now < settlementTime) { allSettled = false; continue; }
                    let matchResult = null;
-                   try { if (mongoose.Types.ObjectId.isValid(leg.matchId)) matchResult = await Match.findById(leg.matchId); if (!matchResult && leg.match) matchResult = await Match.findOne({ homeTeam: leg.match.split(' v ')[0], startTime: leg.startTime }); } catch(e){}
+                   try { 
+                       if (mongoose.Types.ObjectId.isValid(leg.matchId)) matchResult = await Match.findById(leg.matchId); 
+                       if (!matchResult && leg.match) matchResult = await Match.findOne({ homeTeam: leg.match.split(' v ')[0], startTime: leg.startTime }); 
+                   } catch(e){}
                    let resultObj = null;
                    if (matchResult) {
                        if (matchResult.result && matchResult.result.homeGoals !== undefined && matchResult.result.awayGoals !== undefined) resultObj = matchResult.result;
-                       else { const sc = matchResult.finalScore || matchResult.score; if (typeof sc === 'string' && sc.includes('-')) { const p=sc.split('-').map(s=>parseInt(s.trim())); if (p.length===2 && !isNaN(p[0]) && !isNaN(p[1])) resultObj = { homeGoals: p[0], awayGoals: p[1], correctScore: sc }; } }
+                       else { 
+                           const sc = matchResult.finalScore || matchResult.score; 
+                           if (typeof sc === 'string' && sc.includes('-')) { 
+                               const p=sc.split('-').map(s=>parseInt(s.trim())); 
+                               if (p.length===2 && !isNaN(p[0]) && !isNaN(p[1])) resultObj = { homeGoals: p[0], awayGoals: p[1], correctScore: sc }; 
+                           } 
+                       }
                    }
                    let isWin = false;
                    const pickStr = (leg.pick || '').toString().trim().toUpperCase();
                    const selStr = (leg.selection || '').toString().trim().toUpperCase();
                    if (resultObj) {
-                       const hG = parseInt(resultObj.homeGoals) || 0; const aG = parseInt(resultObj.awayGoals) || 0; const total = hG + aG; const bothScored = (hG > 0 && aG > 0);
+                       const hG = parseInt(resultObj.homeGoals) || 0; 
+                       const aG = parseInt(resultObj.awayGoals) || 0; 
+                       const total = hG + aG; 
+                       const bothScored = (hG > 0 && aG > 0);
                        if (pickStr.match(/^\d+-\d+$/)) isWin = (pickStr === `${hG}-${aG}`);
                        else if (pickStr.includes('OVER') || pickStr.includes('UNDER') || selStr.includes('OVER') || selStr.includes('UNDER')) {
                            const matchNum = pickStr.match(/\d+(\.\d+)?/) || selStr.match(/\d+(\.\d+)?/);
-                           if (matchNum) { const line = parseFloat(matchNum[0]); if ((pickStr.includes('OVER') || selStr.includes('OVER')) && total > line) isWin = true; if ((pickStr.includes('UNDER') || selStr.includes('UNDER')) && total < line) isWin = true; }
+                           if (matchNum) { 
+                               const line = parseFloat(matchNum[0]); 
+                               if ((pickStr.includes('OVER') || selStr.includes('OVER')) && total > line) isWin = true; 
+                               if ((pickStr.includes('UNDER') || selStr.includes('UNDER')) && total < line) isWin = true; 
+                           }
                        }
                        else if (pickStr === '1X' || selStr.includes('1X')) isWin = hG >= aG;
                        else if (pickStr === 'X2' || selStr.includes('X2')) isWin = aG >= hG;
                        else if (pickStr === '12' || selStr.includes('12')) isWin = hG !== aG;
-                       else if (selStr.includes('BTTS') || pickStr === 'YES' || pickStr === 'NO') { if ((pickStr === 'YES' || selStr.includes('YES')) && bothScored) isWin = true; if ((pickStr === 'NO' || selStr.includes('NO')) && !bothScored) isWin = true; }
+                       else if (selStr.includes('BTTS') || pickStr === 'YES' || pickStr === 'NO') { 
+                           if ((pickStr === 'YES' || selStr.includes('YES')) && bothScored) isWin = true; 
+                           if ((pickStr === 'NO' || selStr.includes('NO')) && !bothScored) isWin = true; 
+                       }
                        else if (pickStr === 'ODD' || selStr === 'ODD') isWin = (total % 2 !== 0);
                        else if (pickStr === 'EVEN' || selStr === 'EVEN') isWin = (total % 2 === 0);
-                       else { if ((pickStr === '1' || selStr === '1' || pickStr.includes('HOME')) && hG > aG) isWin = true; else if ((pickStr === 'X' || pickStr === 'DRAW' || selStr.includes('DRAW')) && hG === aG) isWin = true; else if ((pickStr === '2' || selStr === '2' || pickStr.includes('AWAY')) && aG > hG) isWin = true; }
+                       else { 
+                           if ((pickStr === '1' || selStr === '1' || pickStr.includes('HOME')) && hG > aG) isWin = true; 
+                           else if ((pickStr === 'X' || pickStr === 'DRAW' || selStr.includes('DRAW')) && hG === aG) isWin = true; 
+                           else if ((pickStr === '2' || selStr === '2' || pickStr.includes('AWAY')) && aG > hG) isWin = true; 
+                       }
                    } else { isWin = Math.random() > 0.5; }
                    leg.status = isWin ? 'Won' : 'Lost';
                    leg.finalScore = matchResult ? (matchResult.finalScore || matchResult.score || `${resultObj?.homeGoals||0}-${resultObj?.awayGoals||0}`) : null;
-                   betUpdated = true; if (leg.status === 'Lost') hasLost = true;
+                   betUpdated = true; 
+                   if (leg.status === 'Lost') hasLost = true;
                }
                if (hasLost) { bet.status = 'Lost'; betUpdated = true; }
                else if (allSettled) {
                    bet.status = 'Won'; betUpdated = true;
                    const user = await User.findById(bet.userId);
-                   if (user) { user.balance += bet.potentialWin; await user.save(); await Transaction.create({ userId: user._id, type: 'Win', amount: bet.potentialWin, currency: bet.currency, status: 'Success' }); await new Notification({ userId: user._id, title: "Bet Won! 🎉", message: `Your bet ${bet.ticketId} won! ${bet.potentialWin} ${bet.currency} credited.` }).save(); }
+                   if (user) { 
+                       user.balance += bet.potentialWin; 
+                       await user.save(); 
+                       await Transaction.create({ userId: user._id, type: 'Win', amount: bet.potentialWin, currency: bet.currency, status: 'Success' }); 
+                       await new Notification({ userId: user._id, title: "Bet Won! 🎉", message: `Your bet ${bet.ticketId} won! ${bet.potentialWin} ${bet.currency} credited.` }).save(); 
+                   }
                } else if (betUpdated) { bet.status = 'Partial'; }
                if (betUpdated) { bet.markModified('selections'); await bet.save(); }
            }
-       } catch (err) {}
+       } catch (err) { console.error("Settlement error:", err.message); }
    }, 60000);
    
    /* =========================================================
       ODDS API HELPERS
       ========================================================= */
-async function getOddsApiActiveSports() {
-    try {
-        const r = await axios.get('https://api.the-odds-api.com/v4/sports/', {
-            params: { apiKey: ODDS_API_KEY },
-            timeout: 10000
-        });
-        if (r.data && Array.isArray(r.data)) {
-            return r.data.filter(s => 
-                s.active && 
-                !s.key.includes('_outrights') && 
-                !s.key.includes('_winner') &&
-                !s.key.includes('_specials') &&
-                !s.key.includes('_preseason')
-            ).map(s => s.key);
-        }
-    } catch (e) {
-        console.error('Failed to fetch sports list:', e.message);
-    }
-    return [];
-}
-
-/* =========================================================
-      PARLAY API BACKGROUND SYNC (BetWinn Original)
+   async function getOddsApiActiveSports() {
+       try {
+           const r = await axios.get('https://api.the-odds-api.com/v4/sports/', {
+               params: { apiKey: ODDS_API_KEY },
+               timeout: 10000
+           });
+           if (r.data && Array.isArray(r.data)) {
+               return r.data.filter(s => 
+                   s.active && 
+                   !s.key.includes('_outrights') && 
+                   !s.key.includes('_winner') &&
+                   !s.key.includes('_specials') &&
+                   !s.key.includes('_preseason')
+               ).map(s => s.key);
+           }
+       } catch (e) {
+           console.error('Failed to fetch sports list:', e.message);
+       }
+       return [];
+   }
+   
+   /* =========================================================
+      BACKGROUND SYNC (The-Odds-API)
       ========================================================= */
    async function fetchAndCacheLiveOdds() {
        try {
            console.log("🔄 Fetching odds from the-odds-api.com...");
            const activeSports = await getOddsApiActiveSports();
-
+   
            const prioritySports = [
                'soccer_epl','soccer_uefa_champs_league','soccer_spain_la_liga','soccer_italy_serie_a',
                'soccer_germany_bundesliga','soccer_france_ligue_one','basketball_nba',
                'icehockey_nhl','mma_mixed_martial_arts','americanfootball_nfl','baseball_mlb',
                'tennis_atp','tennis_wta','cricket_international','rugby_six_nations','golf_pga'
            ];
-
+   
            let sportsToFetch = [];
            for (const s of prioritySports) {
                if (activeSports.includes(s) && !sportsToFetch.includes(s)) sportsToFetch.push(s);
@@ -1030,7 +1149,7 @@ async function getOddsApiActiveSports() {
                return;
            }
            console.log(`📋 Fetching odds for ${sportsToFetch.length} sports:`, sportsToFetch.slice(0,20).join(', ') + (sportsToFetch.length>20?'...':''));
-
+   
            let allApiMatches = [];
            for (const sport of sportsToFetch) {
                try {
@@ -1050,7 +1169,7 @@ async function getOddsApiActiveSports() {
                    }
                }
            }
-
+   
            try {
                const upcoming = await axios.get('https://api.the-odds-api.com/v4/sports/upcoming/odds/', {
                    params: { apiKey: ODDS_API_KEY, regions: 'eu,uk', markets: 'h2h', oddsFormat: 'decimal' },
@@ -1058,17 +1177,17 @@ async function getOddsApiActiveSports() {
                });
                if (upcoming.data && Array.isArray(upcoming.data)) allApiMatches = allApiMatches.concat(upcoming.data);
            } catch (e) { console.error('❌ Failed upcoming:', e.message); }
-
+   
            const uniqueMap = new Map();
            allApiMatches.forEach(m => { if (!uniqueMap.has(m.id)) uniqueMap.set(m.id, m); });
            const uniqueMatches = Array.from(uniqueMap.values());
-
+   
            const now = new Date(); let syncedCount = 0;
            for (const match of uniqueMatches) {
                const matchDate = new Date(match.commence_time);
                const diffMins = Math.floor((now - matchDate) / 60000);
                if (diffMins > 120) continue;
-
+   
                let homeOdds = 0, drawOdds = 0, awayOdds = 0;
                if (match.bookmakers && match.bookmakers.length > 0) {
                    const h2h = match.bookmakers[0].markets?.find(mk => mk.key === 'h2h');
@@ -1083,7 +1202,7 @@ async function getOddsApiActiveSports() {
                }
                if (homeOdds < 1.05 || awayOdds < 1.05 || homeOdds > 50 || awayOdds > 50) continue;
                if (match.sport_title.toLowerCase().includes('soccer') && !drawOdds) continue;
-
+   
                let mappedSport = 'soccer';
                if (match.sport_key.includes('basketball')) mappedSport = 'basketball';
                else if (match.sport_key.includes('tennis')) mappedSport = 'tennis';
@@ -1104,24 +1223,45 @@ async function getOddsApiActiveSports() {
                else if (match.sport_key.includes('cycling')) mappedSport = 'cycling';
                else if (match.sport_key.includes('aussierules')) mappedSport = 'aussierules';
                else if (match.sport_key.includes('floorball')) mappedSport = 'floorball';
-
+   
                if (mappedSport === 'soccer' && !drawOdds) { 
                    drawOdds = parseFloat(((homeOdds + awayOdds) / 1.6).toFixed(2)); 
                    if (drawOdds < 2.5) drawOdds = 3.10; 
                }
-
+   
                const cc = getCountryCodeFromSportKey(match.sport_key);
                const status = diffMins >= 0 && diffMins <= 115 ? 'live' : 'upcoming';
-
+   
+               // Count actual markets from bookmakers
+               let marketCount = 0;
+               if (match.bookmakers && match.bookmakers[0] && match.bookmakers[0].markets) {
+                   marketCount = match.bookmakers[0].markets.length;
+               }
+               if (marketCount === 0) marketCount = Math.floor(Math.random() * 50) + 20;
+   
                await Match.findOneAndUpdate(
                    { apiId: match.id },
-                   { apiId: match.id, sport: mappedSport, league: match.sport_title || 'League', homeTeam: match.home_team, awayTeam: match.away_team, startTime: matchDate, isLive: status === 'live', status, country: cc, odds: { '1': homeOdds, 'X': drawOdds, '2': awayOdds }, oddsArr: [homeOdds, drawOdds, awayOdds], marketsCount: Math.floor(Math.random()*150)+50, featured: Math.random()>0.8 },
+                   { 
+                       apiId: match.id, 
+                       sport: mappedSport, 
+                       league: match.sport_title || 'League', 
+                       homeTeam: match.home_team, 
+                       awayTeam: match.away_team, 
+                       startTime: matchDate, 
+                       isLive: status === 'live', 
+                       status, 
+                       country: cc, 
+                       odds: { '1': homeOdds, 'X': drawOdds, '2': awayOdds }, 
+                       oddsArr: [homeOdds, drawOdds, awayOdds], 
+                       marketsCount: marketCount, 
+                       featured: Math.random() > 0.8 
+                   },
                    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
                );
                syncedCount++;
            }
            console.log(`✅ Synced ${syncedCount} matches from The-Odds-API`);
-
+   
            const cleanupResult = await Match.deleteMany({
                apiId: { $exists: false },
                status: 'upcoming',
@@ -1151,9 +1291,8 @@ async function getOddsApiActiveSports() {
            fetchAndCacheLiveOdds();
            setInterval(fetchAndCacheLiveOdds, 10 * 60 * 1000);
            app.listen(PORT, () => { 
-           console.log(`BetWinn API running on port ${PORT}`); 
-           console.log(`API Base: ${API_URL}`);
-           console.log('✅ Route registered: GET /api/live-matches');
-       });
+               console.log(`BetWinn API running on port ${PORT}`); 
+               console.log('✅ All routes registered');
+           });
        })
        .catch(err => { console.error('MongoDB connection failed:', err); process.exit(1); });
