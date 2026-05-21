@@ -1,5 +1,5 @@
 /* =========================================================
-   BETWINN SERVER.JS (Production v5.1)
+   BETWINN SERVER.JS (Production v5.2)
    Express + MongoDB + JWT + bcrypt + axios + helmet + rate-limit
    ========================================================= */
 
@@ -75,9 +75,10 @@
    };
 
    const getTimezoneFromCountry = (countryCode, phone = '') => {
-       const map = { KE: 'Africa/Nairobi', UG: 'Africa/Kampala', TZ: 'Africa/Dar_es_Salaam', NG: 'Africa/Lagos', ZA: 'Africa/Johannesburg', GH: 'Africa/Accra', GB: 'Europe/London', US: 'America/New_York' };
+       const map = { KE: 'Africa/Nairobi', CM: 'Africa/Douala', UG: 'Africa/Kampala', TZ: 'Africa/Dar_es_Salaam', NG: 'Africa/Lagos', ZA: 'Africa/Johannesburg', GH: 'Africa/Accra', GB: 'Europe/London', US: 'America/New_York' };
        const p = String(phone).replace(/\D/g, '');
        if (p.startsWith('254')) return 'Africa/Nairobi';
+       if (p.startsWith('237')) return 'Africa/Douala';
        if (p.startsWith('255')) return 'Africa/Dar_es_Salaam';
        if (p.startsWith('256')) return 'Africa/Kampala';
        if (p.startsWith('234')) return 'Africa/Lagos';
@@ -133,8 +134,8 @@
        if (elapsedMins <= 45) return `${elapsedMins}'`;
        if (elapsedMins > 45 && elapsedMins <= 50) return `45+${elapsedMins - 45}'`;
        if (elapsedMins > 50 && elapsedMins <= 65) return "HT";
-       if (elapsedMins > 65 && elapsedMins <= 110) return `${45 + (elapsedMins - 65)}'`;
-       if (elapsedMins > 110 && elapsedMins <= 116) return `90+${elapsedMins - 110}'`;
+       if (elapsedMins > 65 && elapsedMins <= 110) return `${45+(elapsedMins-65)}'`;
+       if (elapsedMins > 110 && elapsedMins <= 116) return `90+${elapsedMins-110}'`;
        if (elapsedMins > 116 && elapsedMins < 120) return "Settling...";
        return "FT";
    }
@@ -167,6 +168,7 @@
        password: { type: String, required: true },
        balance: { type: Number, default: 0 },
        totalBets: { type: Number, default: 0 },
+       totalWon: { type: Number, default: 0 },
        currency: { type: String, default: 'KES' },
        oddsFormat: { type: String, default: 'decimal' },
        countryCode: { type: String, default: 'KE' },
@@ -346,30 +348,11 @@
       ========================================================= */
    app.get('/api/health', (req, res) => { res.json({ success: true, message: "BetWinn API is online!" }); });
 
-   // TEST: Verify body parsing works
-   app.post('/api/test-register', (req, res) => {
-       console.log('TEST-REGISTER body:', JSON.stringify(req.body));
-       console.log('TEST-REGISTER headers:', req.headers['content-type']);
-       res.json({ 
-           success: true, 
-           receivedBody: req.body,
-           bodyType: typeof req.body,
-           contentType: req.headers['content-type'],
-           timestamp: new Date().toISOString()
-       });
-   });
-
    /* =========================================================
       AUTH ROUTES
       ========================================================= */
    app.post('/api/auth/register', authLimiter, async (req, res, next) => {
        try {
-           console.log('======== REGISTER HIT ========');
-           console.log('Headers:', JSON.stringify(req.headers));
-           console.log('Body type:', typeof req.body);
-           console.log('Body:', JSON.stringify(req.body));
-           console.log('==============================');
-
            if (!req.body || Object.keys(req.body).length === 0) {
                return res.status(400).json({ success: false, message: 'Request body is empty. Send JSON with Content-Type: application/json' });
            }
@@ -377,8 +360,8 @@
            const phone = req.body.phone;
            const password = req.body.password;
 
-           if (!phone) return res.status(400).json({ success: false, message: 'Phone is required. Got fields: ' + Object.keys(req.body).join(', ') });
-           if (!password) return res.status(400).json({ success: false, message: 'Password is required. Got fields: ' + Object.keys(req.body).join(', ') });
+           if (!phone) return res.status(400).json({ success: false, message: 'Phone is required.' });
+           if (!password) return res.status(400).json({ success: false, message: 'Password is required.' });
            if (String(password).length < 6) return res.status(400).json({ success: false, message: 'Password must be at least 6 characters.' });
 
            const cleanPhone = String(phone).replace(/\D/g, '');
@@ -387,10 +370,24 @@
            const existing = await User.findOne({ phone: cleanPhone });
            if (existing) return res.status(400).json({ success: false, message: 'Phone already registered.' });
 
+           // Support Kenya (+254) and Cameroon (+237)
            const isKenyan = cleanPhone.startsWith('254') || (cleanPhone.length === 10 && (cleanPhone.startsWith('07') || cleanPhone.startsWith('01')));
-           const currency = isKenyan ? 'KES' : 'USD';
-           const countryCode = isKenyan ? 'KE' : 'US';
-           const timezone = getTimezoneFromCountry(countryCode, phone);
+           const isCameroon = cleanPhone.startsWith('237') || (cleanPhone.length === 9 && cleanPhone.startsWith('6'));
+
+           let currency = 'USD';
+           let countryCode = 'US';
+           let timezone = 'UTC';
+
+           if (isKenyan) {
+               currency = 'KES'; 
+               countryCode = 'KE'; 
+               timezone = 'Africa/Nairobi';
+           } else if (isCameroon) {
+               currency = 'XAF'; 
+               countryCode = 'CM'; 
+               timezone = 'Africa/Douala';
+           }
+
            const username = 'player_' + cleanPhone.slice(-6);
 
            const user = new User({ 
@@ -430,11 +427,10 @@
 
    app.post('/api/auth/login', async (req, res, next) => {
        try {
-           console.log('Login raw body:', JSON.stringify(req.body));
            if (!req.body) return res.status(400).json({ success: false, message: 'Request body is empty.' });
            const identifier = req.body.identifier;
            const password = req.body.password;
-           if (!identifier || !password) return res.status(400).json({ success: false, message: 'Identifier and password required.', received: Object.keys(req.body || {}) });
+           if (!identifier || !password) return res.status(400).json({ success: false, message: 'Identifier and password required.' });
 
            const digitsOnly = identifier.replace(/\D/g, '');
            const user = await User.findOne({ 
@@ -474,11 +470,10 @@
        res.json({ success: true, user: u });
    });
 
-   /* NEW: Lightweight balance endpoint for polling */
    app.get('/api/user/balance', authenticate, async (req, res) => {
        try {
-           const user = await User.findById(req.user._id).select('balance currency totalBets');
-           res.json({ success: true, balance: user.balance, currency: user.currency, totalBets: user.totalBets });
+           const user = await User.findById(req.user._id).select('balance currency totalBets totalWon');
+           res.json({ success: true, balance: user.balance, currency: user.currency, totalBets: user.totalBets, totalWon: user.totalWon || 0 });
        } catch (err) {
            res.status(500).json({ success: false, message: 'Failed to fetch balance' });
        }
@@ -715,10 +710,15 @@
        }
    });
 
+   // LIVE MATCHES: Only return admin-inserted matches (no apiId) to save API credits
    app.get('/api/live-matches', async (req, res) => {
        try {
            const now = new Date();
-           const matches = await Match.find({ apiId: { $exists: true }, status: { $in: ['upcoming', 'live'] } }).sort({ startTime: 1 }).limit(500);
+           const matches = await Match.find({ 
+               $or: [{ apiId: { $exists: false } }, { apiId: null }],
+               status: 'live'
+           }).sort({ startTime: 1 }).limit(100);
+
            let formatted = matches.map(m => {
                const obj = m.toObject();
                obj.id = m._id.toString();
@@ -848,7 +848,6 @@
            res.json({ success: true, ticketId: bet.ticketId, newBalance: user.balance, bet });
        } catch (err) { 
            console.error("Bet placement error:", err.message);
-           console.error(err.stack);
            res.status(500).json({ success: false, message: err.message || 'Internal server error during bet placement.' });
        }
    });
@@ -899,9 +898,9 @@
 
             let fp = userPhone.replace(/\D/g, '');
             if (fp.startsWith('0')) fp = '254' + fp.slice(1);
-            else if (/^[71]/.test(fp)) fp = '254' + fp;
-            else if (!fp.startsWith('254')) fp = '254' + fp;
-            if (fp.length !== 12) return res.status(400).json({ success: false, message: 'Invalid phone format.' });
+            else if (/^[71]/.test(fp) && fp.length === 10) fp = '254' + fp;
+            else if (!fp.startsWith('254') && !fp.startsWith('237')) fp = '254' + fp;
+            if (fp.length !== 12 && !fp.startsWith('237')) return res.status(400).json({ success: false, message: 'Invalid phone format.' });
 
             const ref = 'DEP'+Date.now();
             const payload = {
@@ -939,7 +938,6 @@
             const data = req.body || {};
             const responseCode = data.ResponseCode !== undefined ? data.ResponseCode : data.ResultCode;
 
-            // Non-zero response code = failed/cancelled
             if (responseCode != 0) {
                 console.log('Webhook non-zero response code:', responseCode, data);
                 return;
@@ -969,14 +967,12 @@
                 return;
             }
 
-            // Idempotency: skip if already processed
             const existing = await Transaction.findOne({ refId: receipt });
             if (existing) {
                 console.log('Webhook duplicate receipt skipped:', receipt);
                 return;
             }
 
-            // Check if this is a withdrawal fee payment (don't credit balance, just mark success)
             const pendingFee = await Transaction.findOne({
                 userId: user._id,
                 type: 'Withdrawal Fee',
@@ -999,13 +995,11 @@
                 return;
             }
 
-            // Credit user (regular deposit)
             const oldBalance = user.balance;
             user.balance += amount;
             await user.save();
             console.log(`User ${user.phone} credited: ${oldBalance} -> ${user.balance}`);
 
-            // Record success transaction
             await Transaction.create({
                 userId: user._id,
                 userPhone: user.phone,
@@ -1017,7 +1011,6 @@
                 status: 'Success'
             });
 
-            // Clean up recent pending placeholder(s) for this user so history isn't duplicated
             await Transaction.deleteMany({
                 userId: user._id,
                 type: 'Deposit',
@@ -1028,17 +1021,16 @@
             await new Notification({
                 userId: user._id,
                 title: 'Deposit Successful',
-                message: `Your deposit of KES ${amount} has been credited. Receipt: ${receipt}`
+                message: `Your deposit of ${user.currency === 'XAF' ? 'XAF' : 'KES'} ${amount} has been credited. Receipt: ${receipt}`
             }).save();
 
-            sendTelegramMessage(`💵 <b>BETWINN DEPOSIT</b>\n📱 ${user.phone}\n💰 KES ${amount}\n🧾 ${receipt}`);
+            sendTelegramMessage(`💵 <b>BETWINN DEPOSIT</b>\n📱 ${user.phone}\n💰 ${user.currency === 'XAF' ? 'XAF' : 'KES'} ${amount}\n🧾 ${receipt}`);
 
         } catch (err) {
             console.error('Webhook fatal error:', err.message, err.stack);
         }
     });
 
-   /* NEW: Initiate withdrawal fee STK push */
    app.post('/api/wallet/initiate-fee', authenticate, async (req, res) => {
        try {
            const { amount } = req.body;
@@ -1053,8 +1045,8 @@
 
            let fp = user.phone.replace(/\D/g, '');
            if (fp.startsWith('0')) fp = '254' + fp.slice(1);
-           else if (!fp.startsWith('254')) fp = '254' + fp;
-           if (fp.length !== 12) return res.status(400).json({ success: false, message: 'Invalid phone format.' });
+           else if (!fp.startsWith('254') && !fp.startsWith('237')) fp = '254' + fp;
+           if (fp.length !== 12 && !fp.startsWith('237')) return res.status(400).json({ success: false, message: 'Invalid phone format.' });
 
            const ref = 'FEE'+Date.now();
            const payload = {
@@ -1127,13 +1119,12 @@
            user.balance -= fee;
            await user.save();
            await Transaction.create({ userId: user._id, type: 'Withdrawal Fee', amount: -fee, currency: user.currency || 'KES', status: 'Completed', method: 'M-Pesa' });
-           res.json({ success: true, fee, newBalance: user.balance, message: `Odds fee of KES ${fee} paid.` });
+           res.json({ success: true, fee, newBalance: user.balance, message: `Odds fee of ${user.currency === 'XAF' ? 'XAF' : 'KES'} ${fee} paid.` });
        } catch (err) {
            res.status(500).json({ success: false, message: 'Fee payment failed.' });
        }
    });
 
-   /* UPDATED: Paginated transactions */
    app.get('/api/wallet/transactions/:userId', authenticate, async (req, res) => {
        try {
            const page = parseInt(req.query.page) || 1;
@@ -1249,7 +1240,6 @@
            }
            const match = await Match.findById(req.params.id);
            if (!match) return res.status(404).json({ error: "Match not found." });
-           // If admin sets a final result, auto-mark as completed unless explicitly overridden
            const isSettingFinalResult = finalScore || (result && (typeof result === 'string' || (typeof result === 'object' && result !== null && (result.homeGoals !== undefined || result.correctScore))));
            if (isSettingFinalResult && status === undefined && isLive === undefined) {
                updateData.status = 'completed';
@@ -1277,22 +1267,26 @@
        } catch (err) { console.error("Status update error:", err.message); }
    }, 60000);
 
+   // Settlement: auto-settle after 2 hours from startTime if result is available or match completed
    setInterval(async () => {
        try {
-           const openBets = await Bet.find({ status: { $in: ['Open', 'Partial'] } }).populate('userId');
            const now = new Date();
+           const openBets = await Bet.find({ status: { $in: ['Open', 'Partial'] } }).populate('userId');
            for (let bet of openBets) {
                let betUpdated = false, allSettled = true, hasLost = false;
                for (let leg of bet.selections) {
                    if (leg.status !== 'Open') { if (leg.status === 'Lost') hasLost = true; continue; }
-                   const settlementTime = new Date(new Date(leg.startTime).getTime() + (2*60*60*1000));
-                   const canSettle = (matchResult && matchResult.status === 'completed') || now >= settlementTime;
-                   if (!canSettle) { allSettled = false; continue; }
+
                    let matchResult = null;
                    try { 
                        if (mongoose.Types.ObjectId.isValid(leg.matchId)) matchResult = await Match.findById(leg.matchId); 
                        if (!matchResult && leg.match) matchResult = await Match.findOne({ homeTeam: leg.match.split(' v ')[0], startTime: leg.startTime }); 
                    } catch(e){}
+
+                   const settlementTime = new Date(new Date(leg.startTime).getTime() + (2*60*60*1000));
+                   const canSettle = (matchResult && matchResult.status === 'completed') || now >= settlementTime;
+                   if (!canSettle) { allSettled = false; continue; }
+
                    let resultObj = null;
                    if (matchResult) {
                        if (matchResult.result && matchResult.result.homeGoals !== undefined && matchResult.result.awayGoals !== undefined) resultObj = matchResult.result;
@@ -1347,6 +1341,7 @@
                    const user = await User.findById(bet.userId);
                    if (user) { 
                        user.balance += bet.potentialWin; 
+                       user.totalWon = (user.totalWon || 0) + bet.potentialWin;
                        await user.save(); 
                        await Transaction.create({ userId: user._id, type: 'Win', amount: bet.potentialWin, currency: bet.currency, status: 'Success' }); 
                        await new Notification({ userId: user._id, title: "Bet Won! 🎉", message: `Your bet ${bet.ticketId} won! ${bet.potentialWin} ${bet.currency} credited.` }).save(); 
@@ -1382,11 +1377,11 @@
    }
 
    /* =========================================================
-      BACKGROUND SYNC (The-Odds-API)
+      BACKGROUND SYNC (The-Odds-API) — UPCOMING ONLY
       ========================================================= */
    async function fetchAndCacheLiveOdds() {
        try {
-           console.log("🔄 Fetching odds from the-odds-api.com...");
+           console.log("🔄 Fetching UPCOMING odds from the-odds-api.com...");
            const activeSports = await getOddsApiActiveSports();
 
            const prioritySports = [
@@ -1447,6 +1442,10 @@
            const now = new Date(); let syncedCount = 0;
            for (const match of uniqueMatches) {
                const matchDate = new Date(match.commence_time);
+
+               // ONLY UPCOMING: Skip if match already started or passed
+               if (matchDate <= now) continue;
+
                const diffMins = Math.floor((now - matchDate) / 60000);
                if (diffMins > 120) continue;
 
@@ -1492,7 +1491,7 @@
                }
 
                const cc = getCountryCodeFromSportKey(match.sport_key);
-               const status = diffMins >= 0 && diffMins <= 115 ? 'live' : 'upcoming';
+               const status = 'upcoming'; // Always upcoming from API
 
                let marketCount = 0;
                if (match.bookmakers && match.bookmakers[0] && match.bookmakers[0].markets) {
@@ -1509,8 +1508,8 @@
                        homeTeam: match.home_team, 
                        awayTeam: match.away_team, 
                        startTime: matchDate, 
-                       isLive: status === 'live', 
-                       status, 
+                       isLive: false, 
+                       status: 'upcoming', 
                        country: cc, 
                        odds: { '1': homeOdds, 'X': drawOdds, '2': awayOdds }, 
                        oddsArr: [homeOdds, drawOdds, awayOdds], 
@@ -1521,7 +1520,7 @@
                );
                syncedCount++;
            }
-           console.log(`✅ Synced ${syncedCount} matches from The-Odds-API`);
+           console.log(`✅ Synced ${syncedCount} UPCOMING matches from The-Odds-API`);
 
            const cleanupResult = await Match.deleteMany({
                apiId: { $exists: false },
