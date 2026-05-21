@@ -689,7 +689,11 @@ function isCacheFresh(cacheTime, ttl) {
    app.get('/api/matches', async (req, res, next) => {
        try {
            const { sport, league, status, search, date, page = 1, limit = 50 } = req.query;
-           let query = { status: { $in: ['upcoming', 'live'] } };
+           // Default: show upcoming (API) + live (admin-only). API matches never go live.
+           let query = { $or: [
+               { status: 'upcoming' },
+               { status: 'live', $or: [{ apiId: { $exists: false } }, { apiId: null }] }
+           ] };
            if (sport) query.sport = sport;
            if (league) query.league = { $regex: league, $options: 'i' };
            if (status === 'live') query.status = 'live';
@@ -697,7 +701,7 @@ function isCacheFresh(cacheTime, ttl) {
            else if (date === 'tomorrow') { const s = new Date(); s.setDate(s.getDate()+1); s.setHours(0,0,0,0); const e = new Date(); e.setDate(e.getDate()+1); e.setHours(23,59,59,999); query.startTime = { $gte: s, $lte: e }; }
            if (search) { query.$or = [{ homeTeam: { $regex: search, $options: 'i' } }, { awayTeam: { $regex: search, $options: 'i' } }, { league: { $regex: search, $options: 'i' } }]; }
 
-           const matches = await Match.find(query).sort({ startTime: 1 }).limit(parseInt(limit)).skip((parseInt(page) - 1) * parseInt(limit));
+           const matches = await Match.find(query).sort({ apiId: 1, startTime: 1 }).limit(parseInt(limit)).skip((parseInt(page) - 1) * parseInt(limit));
            let formatted = matches.map(m => {
                const obj = m.toObject();
                if (m.status === 'live' && m.startTime) {
@@ -718,7 +722,7 @@ function isCacheFresh(cacheTime, ttl) {
 
    app.get('/api/matches/featured', async (req, res, next) => {
        try {
-           const matches = await Match.find({ featured: true, status: { $in: ['upcoming', 'live'] } }).limit(10).sort({ startTime: 1 });
+           const matches = await Match.find({ featured: true, status: { $in: ['upcoming', 'live'] } }).sort({ apiId: 1, startTime: 1 }).limit(10);
            let formatted = matches.map(m => {
                const obj = m.toObject(); obj.id = m._id.toString();
                if (m.status === 'live' && m.startTime) { obj.score = getDeterministicScore(m._id.toString(), m.startTime.toISOString(), m.result); obj.time = getMatchTimeStr(m.startTime.toISOString()); obj.isLive = true; }
@@ -1283,9 +1287,22 @@ function isCacheFresh(cacheTime, ttl) {
    setInterval(async () => {
        try {
            const now = new Date();
-           await Match.updateMany({ status: 'upcoming', startTime: { $lte: now } }, { $set: { status: 'live', isLive: true } });
+           // ONLY promote admin-injected matches (no apiId) to live
+           await Match.updateMany(
+               { status: 'upcoming', startTime: { $lte: now }, $or: [{ apiId: { $exists: false } }, { apiId: null }] },
+               { $set: { status: 'live', isLive: true } }
+           );
+           // Auto-complete admin live matches after 2 hours
            const twoHoursAgo = new Date(now.getTime() - (2*60*60*1000));
-           await Match.updateMany({ status: 'live', startTime: { $lte: twoHoursAgo } }, { $set: { status: 'completed', isLive: false } });
+           await Match.updateMany(
+               { status: 'live', startTime: { $lte: twoHoursAgo }, $or: [{ apiId: { $exists: false } }, { apiId: null }] },
+               { $set: { status: 'completed', isLive: false } }
+           );
+           // Also complete any API matches that somehow became live (safety cleanup)
+           await Match.updateMany(
+               { status: 'live', apiId: { $exists: true, $ne: null } },
+               { $set: { status: 'completed', isLive: false } }
+           );
        } catch (err) { console.error("Status update error:", err.message); }
    }, 60000);
 
