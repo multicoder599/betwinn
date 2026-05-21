@@ -310,24 +310,30 @@ function isCacheFresh(cacheTime, ttl) {
    }
 
    function startAviatorRound() {
+       // Reset any stuck state
        aviatorState.status = 'FLYING';
        aviatorState.startTime = Date.now();
        aviatorState.crashPoint = generateCrashPoint();
        aviatorState.roundId++;
-       console.log(`Aviator Round #${aviatorState.roundId} started. Crash @ ${aviatorState.crashPoint}x`);
+       aviatorState.bets.clear(); // Clear bets from previous round
+       console.log(`✈️ Aviator Round #${aviatorState.roundId} started. Crash @ ${aviatorState.crashPoint}x`);
+
        const duration = Math.log(aviatorState.crashPoint) / 0.06 * 1000 + 2000;
+
        setTimeout(() => {
-           if (aviatorState.status === 'FLYING') {
-               aviatorState.status = 'CRASHED';
-               aviatorState.history.unshift(aviatorState.crashPoint);
-               if (aviatorState.history.length > 20) aviatorState.history.pop();
-               console.log(`Aviator Round #${aviatorState.roundId} crashed @ ${aviatorState.crashPoint}x`);
-               setTimeout(startAviatorRound, 5000);
-           }
+           // Force crash regardless of external state mutations
+           aviatorState.status = 'CRASHED';
+           aviatorState.history.unshift(aviatorState.crashPoint);
+           if (aviatorState.history.length > 20) aviatorState.history.pop();
+           console.log(`💥 Aviator Round #${aviatorState.roundId} crashed @ ${aviatorState.crashPoint}x`);
+
+           // Auto-start next round after 5s cooldown
+           setTimeout(startAviatorRound, 5000);
        }, duration);
    }
 
-   setTimeout(startAviatorRound, 5000);
+   // Start first round 3 seconds after server boot
+   setTimeout(startAviatorRound, 3000);
 
    /* =========================================================
       AUTH MIDDLEWARE
@@ -516,13 +522,13 @@ function isCacheFresh(cacheTime, ttl) {
    app.get('/api/aviator/state', (req, res) => {
        const now = Date.now();
        let currentMult = 1.00;
+       // READ-ONLY: Never mutate aviatorState here. Server loop controls state.
        if (aviatorState.status === 'FLYING') {
            const elapsed = (now - aviatorState.startTime) / 1000;
            currentMult = parseFloat(Math.max(1.00, Math.pow(Math.E, 0.06 * elapsed)).toFixed(2));
+           // Cap at crash point for display only
            if (currentMult >= aviatorState.crashPoint) {
-               aviatorState.status = 'CRASHED';
-               aviatorState.history.unshift(aviatorState.crashPoint);
-               if (aviatorState.history.length > 20) aviatorState.history.pop();
+               currentMult = aviatorState.crashPoint;
            }
        }
        res.json({
