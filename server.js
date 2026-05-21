@@ -23,6 +23,21 @@
    const MEGAPAY_API_KEY = process.env.MEGAPAY_API_KEY || 'MGPY5V6XltyF';
    const MEGAPAY_EMAIL = process.env.MEGAPAY_EMAIL || 'kanyingiwaitara@gmail.com';
 
+/* =========================================================
+   API CACHE (Preserve Credits)
+   ========================================================= */
+const API_CACHE = {
+    lastFetch: 0,
+    ttl: 30 * 60 * 1000,  // 30 minutes between API calls
+    sportsLastFetch: 0,
+    sportsTtl: 60 * 60 * 1000,  // 1 hour for sports list
+    cachedSports: []
+};
+
+function isCacheFresh(cacheTime, ttl) {
+    return (Date.now() - cacheTime) < ttl;
+}
+
    /* =========================================================
       CUSTOM MONGO SANITIZE
       ========================================================= */
@@ -553,6 +568,11 @@
       ========================================================= */
    app.get('/api/sports', async (req, res) => {
        try {
+           // Use cached sports list if fresh (1 hour TTL)
+           if (isCacheFresh(API_CACHE.sportsLastFetch, API_CACHE.sportsTtl) && API_CACHE.cachedSports.length > 0) {
+               return res.json({ success: true, sports: API_CACHE.cachedSports, source: 'cache', total: API_CACHE.cachedSports.length });
+           }
+
            const response = await axios.get('https://api.the-odds-api.com/v4/sports/', { params: { apiKey: ODDS_API_KEY }, timeout: 8000 });
            if (response.data && Array.isArray(response.data)) {
                const iconMap = {
@@ -590,7 +610,9 @@
                });
                const seen = new Set();
                const deduped = mapped.filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; });
-               return res.json({ success: true, sports: deduped.slice(0, 60), source: 'the-odds-api', total: deduped.length });
+               API_CACHE.cachedSports = deduped.slice(0, 60);
+               API_CACHE.sportsLastFetch = Date.now();
+               return res.json({ success: true, sports: API_CACHE.cachedSports, source: 'the-odds-api', total: API_CACHE.cachedSports.length });
            }
        } catch (e) {}
        const sports = [
@@ -1301,11 +1323,14 @@
                    let isWin = false;
                    const pickStr = (leg.pick || '').toString().trim().toUpperCase();
                    const selStr = (leg.selection || '').toString().trim().toUpperCase();
-                   if (resultObj) {
+
+                   // PRIORITY 1: Admin-inserted result (matches without apiId or with explicit result object)
+                   if (resultObj && (resultObj.homeGoals !== undefined || resultObj.correctScore)) {
                        const hG = parseInt(resultObj.homeGoals) || 0; 
                        const aG = parseInt(resultObj.awayGoals) || 0; 
                        const total = hG + aG; 
                        const bothScored = (hG > 0 && aG > 0);
+
                        if (pickStr.match(/^\d+-\d+$/)) isWin = (pickStr === `${hG}-${aG}`);
                        else if (pickStr.includes('OVER') || pickStr.includes('UNDER') || selStr.includes('OVER') || selStr.includes('UNDER')) {
                            const matchNum = pickStr.match(/\d+(\.\d+)?/) || selStr.match(/\d+(\.\d+)?/);
@@ -1329,7 +1354,11 @@
                            else if ((pickStr === 'X' || pickStr === 'DRAW' || selStr.includes('DRAW')) && hG === aG) isWin = true; 
                            else if ((pickStr === '2' || selStr === '2' || pickStr.includes('AWAY')) && aG > hG) isWin = true; 
                        }
-                   } else { isWin = Math.random() > 0.5; }
+                   } 
+                   // PRIORITY 2: Random settlement for API matches without admin result
+                   else { 
+                       isWin = Math.random() > 0.5; 
+                   }
                    leg.status = isWin ? 'Won' : 'Lost';
                    leg.finalScore = matchResult ? (matchResult.finalScore || matchResult.score || `${resultObj?.homeGoals||0}-${resultObj?.awayGoals||0}`) : null;
                    betUpdated = true; 
@@ -1357,6 +1386,10 @@
       ========================================================= */
    async function getOddsApiActiveSports() {
        try {
+           // Reuse cached sports data if available
+           if (API_CACHE.cachedSports.length > 0) {
+               return API_CACHE.cachedSports.map(s => s.key).filter(Boolean);
+           }
            const r = await axios.get('https://api.the-odds-api.com/v4/sports/', {
                params: { apiKey: ODDS_API_KEY },
                timeout: 10000
@@ -1379,61 +1412,55 @@
    /* =========================================================
       BACKGROUND SYNC (The-Odds-API) — UPCOMING ONLY
       ========================================================= */
-   async function fetchAndCacheLiveOdds() {
+   async function fetchAndCacheUpcomingOdds() {
        try {
-           console.log("🔄 Fetching UPCOMING odds from the-odds-api.com...");
-           const activeSports = await getOddsApiActiveSports();
-
-           const prioritySports = [
-               'soccer_epl','soccer_uefa_champs_league','soccer_spain_la_liga','soccer_italy_serie_a',
-               'soccer_germany_bundesliga','soccer_france_ligue_one','basketball_nba',
-               'icehockey_nhl','mma_mixed_martial_arts','americanfootball_nfl','baseball_mlb',
-               'tennis_atp','tennis_wta','cricket_international','rugby_six_nations','golf_pga'
-           ];
-
-           let sportsToFetch = [];
-           for (const s of prioritySports) {
-               if (activeSports.includes(s) && !sportsToFetch.includes(s)) sportsToFetch.push(s);
-           }
-           for (const s of activeSports) {
-               if (!sportsToFetch.includes(s)) {
-                   sportsToFetch.push(s);
-                   if (sportsToFetch.length >= 18) break;
-               }
-           }
-           if (sportsToFetch.length === 0) {
-               console.error("❌ No active sports available from The-Odds-API");
+           // Cache check: skip API call if cache is fresh (30 min TTL)
+           if (isCacheFresh(API_CACHE.lastFetch, API_CACHE.ttl)) {
+               console.log("⏳ API cache still fresh. Skipping fetch to preserve credits.");
                return;
            }
-           console.log(`📋 Fetching odds for ${sportsToFetch.length} sports`);
 
+           console.log("🔄 Fetching UPCOMING odds from the-odds-api.com...");
+
+           // Use ONLY the /upcoming/odds/ endpoint — 1 request, all sports, upcoming only
+           // This preserves API credits vs calling 15+ individual sport endpoints
            let allApiMatches = [];
-           for (const sport of sportsToFetch) {
-               try {
-                   const response = await axios.get(`https://api.the-odds-api.com/v4/sports/${sport}/odds/`, {
-                       params: { apiKey: ODDS_API_KEY, regions: 'eu,uk', markets: 'h2h', oddsFormat: 'decimal' },
-                       timeout: 15000
-                   });
-                   if (response.data && Array.isArray(response.data)) allApiMatches = allApiMatches.concat(response.data);
-               } catch (e) {
-                   const msg = e.response?.data?.message || e.response?.data || e.message;
-                   if (msg?.includes?.('Unknown sport') || msg?.includes?.('does not exist')) {
-                       console.warn(`⚠️ Skipping ${sport}: not available`);
-                   } else if (e.response?.status === 403) {
-                       console.error(`❌ ${sport}: API key invalid or quota exceeded (403)`);
-                   } else {
-                       console.error(`❌ Failed sport ${sport}:`, msg);
-                   }
-               }
-           }
-
            try {
                const upcoming = await axios.get('https://api.the-odds-api.com/v4/sports/upcoming/odds/', {
                    params: { apiKey: ODDS_API_KEY, regions: 'eu,uk', markets: 'h2h', oddsFormat: 'decimal' },
-                   timeout: 15000
+                   timeout: 20000
                });
-               if (upcoming.data && Array.isArray(upcoming.data)) allApiMatches = allApiMatches.concat(upcoming.data);
-           } catch (e) { console.error('❌ Failed upcoming:', e.message); }
+               if (upcoming.data && Array.isArray(upcoming.data)) {
+                   allApiMatches = upcoming.data;
+                   console.log(`📥 Received ${allApiMatches.length} upcoming matches from API`);
+               }
+           } catch (e) {
+               const msg = e.response?.data?.message || e.response?.data || e.message;
+               if (e.response?.status === 403) {
+                   console.error('❌ API key invalid or quota exceeded (403). Skipping fetch.');
+                   return;
+               }
+               console.error('❌ Failed upcoming fetch:', msg);
+               return;
+           }
+
+           // If upcoming returned very few, try a few priority sports as backup (max 3 to save credits)
+           if (allApiMatches.length < 20) {
+               const prioritySports = ['soccer_epl','soccer_uefa_champs_league','basketball_nba'];
+               for (const sport of prioritySports) {
+                   try {
+                       const response = await axios.get(`https://api.the-odds-api.com/v4/sports/${sport}/odds/`, {
+                           params: { apiKey: ODDS_API_KEY, regions: 'eu,uk', markets: 'h2h', oddsFormat: 'decimal' },
+                           timeout: 15000
+                       });
+                       if (response.data && Array.isArray(response.data)) {
+                           allApiMatches = allApiMatches.concat(response.data);
+                       }
+                   } catch (e) {
+                       console.warn(`⚠️ Backup fetch ${sport} failed:`, e.message);
+                   }
+               }
+           }
 
            const uniqueMap = new Map();
            allApiMatches.forEach(m => { if (!uniqueMap.has(m.id)) uniqueMap.set(m.id, m); });
@@ -1443,11 +1470,12 @@
            for (const match of uniqueMatches) {
                const matchDate = new Date(match.commence_time);
 
-               // ONLY UPCOMING: Skip if match already started or passed
+               // STRICTLY UPCOMING ONLY: Skip if match already started or passed
                if (matchDate <= now) continue;
 
-               const diffMins = Math.floor((now - matchDate) / 60000);
-               if (diffMins > 120) continue;
+               // Skip matches too far in the future (>7 days) to keep DB lean
+               const daysAhead = (matchDate - now) / (1000 * 60 * 60 * 24);
+               if (daysAhead > 7) continue;
 
                let homeOdds = 0, drawOdds = 0, awayOdds = 0;
                if (match.bookmakers && match.bookmakers.length > 0) {
@@ -1491,7 +1519,6 @@
                }
 
                const cc = getCountryCodeFromSportKey(match.sport_key);
-               const status = 'upcoming'; // Always upcoming from API
 
                let marketCount = 0;
                if (match.bookmakers && match.bookmakers[0] && match.bookmakers[0].markets) {
@@ -1520,18 +1547,53 @@
                );
                syncedCount++;
            }
-           console.log(`✅ Synced ${syncedCount} UPCOMING matches from The-Odds-API`);
 
+           // Update cache timestamp
+           API_CACHE.lastFetch = Date.now();
+           console.log(`✅ Synced ${syncedCount} UPCOMING matches from The-Odds-API | Cache valid for 30 min`);
+
+           // Clean up old API matches that have passed (keep for 24h then remove)
            const cleanupResult = await Match.deleteMany({
-               apiId: { $exists: false },
+               apiId: { $exists: true },
                status: 'upcoming',
-               createdAt: { $lt: new Date(Date.now() - 6*60*60*1000) }
+               startTime: { $lt: new Date(Date.now() - 24*60*60*1000) }
            });
            if (cleanupResult.deletedCount > 0) {
-               console.log(`🗑️ Cleaned up ${cleanupResult.deletedCount} old dummy matches`);
+               console.log(`🗑️ Cleaned up ${cleanupResult.deletedCount} expired API matches`);
            }
        } catch (e) { console.error("🔥 Odds Fetch Error:", e.message); }
    }
+
+   /* =========================================================
+      BET RESULTS POLLING ENDPOINT (for frontend auto-update)
+      ========================================================= */
+   app.get('/api/bets/results', authenticate, async (req, res) => {
+       try {
+           const twoHoursAgo = new Date(Date.now() - (2 * 60 * 60 * 1000));
+           // Find bets that were recently settled (Won or Lost) in the last 10 minutes
+           const recentlySettled = await Bet.find({
+               userId: req.user._id,
+               status: { $in: ['Won', 'Lost'] },
+               updatedAt: { $gte: new Date(Date.now() - 10 * 60 * 1000) }
+           }).sort({ updatedAt: -1 }).limit(20);
+
+           // Also find any open bets that should have been settled by now (for immediate frontend feedback)
+           const shouldBeSettled = await Bet.find({
+               userId: req.user._id,
+               status: { $in: ['Open', 'Partial'] },
+               placedAt: { $lte: twoHoursAgo }
+           }).sort({ placedAt: -1 }).limit(10);
+
+           res.json({
+               success: true,
+               updatedBets: recentlySettled,
+               pendingSettlements: shouldBeSettled.length,
+               lastCheck: new Date()
+           });
+       } catch (err) {
+           res.status(500).json({ success: false, message: 'Failed to fetch results' });
+       }
+   });
 
    /* =========================================================
       GLOBAL ERROR HANDLER
@@ -1549,8 +1611,8 @@
            console.log('MongoDB connected');
            console.log('SERVER FILE PATH:', require('path').resolve(__filename));
            try { await mongoose.connection.collection('bets').dropIndex('bookingCode_1'); console.log('Cleared legacy index.'); } catch(e){}
-           fetchAndCacheLiveOdds();
-           setInterval(fetchAndCacheLiveOdds, 10 * 60 * 1000);
+           fetchAndCacheUpcomingOdds();
+           setInterval(fetchAndCacheUpcomingOdds, 30 * 60 * 1000);
            app.listen(PORT, () => { 
                console.log(`BetWinn API running on port ${PORT}`); 
                console.log('✅ All routes registered');
