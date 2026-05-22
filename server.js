@@ -1,5 +1,5 @@
 /* =========================================================
-   BETWINN SERVER.JS (Production v5.3 — Settlement & Timezone Fix)
+   BETWINN SERVER.JS (Production v5.4 — Settlement & Lifecycle Fix)
    Express + MongoDB + JWT + bcrypt + axios + helmet + rate-limit
    ========================================================= */
 
@@ -716,15 +716,16 @@ function isCacheFresh(cacheTime, ttl) {
    app.get('/api/matches', async (req, res, next) => {
        try {
            const { sport, league, status, search, date, page = 1, limit = 50 } = req.query;
+           // FIX: Only show upcoming matches + admin live matches. API matches are auto-completed at kickoff.
            let query = { $or: [
                { status: 'upcoming' },
                { status: 'live', $or: [{ apiId: { $exists: false } }, { apiId: null }] }
            ] };
            if (sport) query.sport = sport;
            if (league) query.league = { $regex: league, $options: 'i' };
-           if (status === 'live') query.status = 'live';
-           if (date === 'today') { const s = new Date(); s.setHours(0,0,0,0); const e = new Date(); e.setHours(23,59,59,999); query.startTime = { $gte: s, $lte: e }; }
-           else if (date === 'tomorrow') { const s = new Date(); s.setDate(s.getDate()+1); s.setHours(0,0,0,0); const e = new Date(); e.setDate(e.getDate()+1); e.setHours(23,59,59,999); query.startTime = { $gte: s, $lte: e }; }
+           if (status === 'live') query = { status: 'live', $or: [{ apiId: { $exists: false } }, { apiId: null }] };
+           if (date === 'today') { const s = new Date(); s.setHours(0,0,0,0); const e = new Date(); e.setHours(23,59,59,999); query = { startTime: { $gte: s, $lte: e }, ...query }; }
+           else if (date === 'tomorrow') { const s = new Date(); s.setDate(s.getDate()+1); s.setHours(0,0,0,0); const e = new Date(); e.setDate(e.getDate()+1); e.setHours(23,59,59,999); query = { startTime: { $gte: s, $lte: e }, ...query }; }
            if (search) { query.$or = [{ homeTeam: { $regex: search, $options: 'i' } }, { awayTeam: { $regex: search, $options: 'i' } }, { league: { $regex: search, $options: 'i' } }]; }
 
            const matches = await Match.find(query).sort({ apiId: 1, startTime: 1 }).limit(parseInt(limit)).skip((parseInt(page) - 1) * parseInt(limit));
@@ -1229,9 +1230,15 @@ function isCacheFresh(cacheTime, ttl) {
        } catch (err) { res.status(500).send(); }
    });
 
+   // FIX: Return ALL matches (upcoming, live, completed) so admin Results view works
    app.get('/api/admin/matches', verifyAdminToken, async (req, res) => {
        try {
-           const matches = await Match.find({ status: { $in: ['upcoming', 'live'] } }).sort({ startTime: 1 }).limit(500);
+           let query = {};
+           if (req.query.status) {
+               const statuses = req.query.status.split(',');
+               query.status = { $in: statuses };
+           }
+           const matches = await Match.find(query).sort({ startTime: -1 }).limit(500);
            const enriched = matches.map(m => {
                const obj = m.toObject();
                obj.id = m._id.toString();
@@ -1281,40 +1288,58 @@ function isCacheFresh(cacheTime, ttl) {
        } catch (err) { res.status(500).send(); }
    });
 
+   // FIX: Setting a final result ALWAYS marks match completed, regardless of elapsed time
    app.put('/api/admin/matches/:id/result', verifyAdminToken, async (req, res) => {
        try {
            const { score, finalScore, result, isLive, status } = req.body;
            const updateData = {};
            if (score !== undefined) updateData.score = score;
            if (finalScore !== undefined) updateData.finalScore = finalScore;
+           
+           let isSettingFinalResult = false;
            if (result !== undefined) {
                if (typeof result === 'string' && result.includes('-')) {
                    const [h,a] = result.split('-').map(s=>parseInt(s.trim()));
                    updateData.result = { homeGoals: h||0, awayGoals: a||0, correctScore: result, winner: h>a?'home':a>h?'away':'draw' };
+                   isSettingFinalResult = true;
                } else if (typeof result === 'object' && result !== null) {
                    const h=parseInt(result.homeGoals), a=parseInt(result.awayGoals);
                    updateData.result = { homeGoals: isNaN(h)?0:h, awayGoals: isNaN(a)?0:a, correctScore: result.correctScore||`${h}-${a}`, btts: result.btts, winner: result.winner||(h>a?'home':a>h?'away':'draw') };
+                   if (result.correctScore || result.homeGoals !== undefined) isSettingFinalResult = true;
                } else { updateData.result = result; }
            }
            if (!updateData.result && (finalScore || score)) {
                const sc = finalScore || score;
                if (typeof sc === 'string' && sc.includes('-')) {
                    const [h,a] = sc.split('-').map(s=>parseInt(s.trim()));
-                   if (!isNaN(h) && !isNaN(a)) updateData.result = { homeGoals: h, awayGoals: a, correctScore: sc, winner: h>a?'home':a>h?'away':'draw' };
+                   if (!isNaN(h) && !isNaN(a)) {
+                       updateData.result = { homeGoals: h, awayGoals: a, correctScore: sc, winner: h>a?'home':a>h?'away':'draw' };
+                       isSettingFinalResult = true;
+                   }
                }
            }
+
            const match = await Match.findById(req.params.id);
            if (!match) return res.status(404).json({ error: "Match not found." });
-           const isSettingFinalResult = finalScore || (result && (typeof result === 'string' || (typeof result === 'object' && result !== null && (result.homeGoals !== undefined || result.correctScore))));
-           if (isSettingFinalResult && status === undefined && isLive === undefined) {
+
+           // FIX: If admin is setting a final result, ALWAYS mark as completed immediately
+           if (isSettingFinalResult) {
                updateData.status = 'completed';
                updateData.isLive = false;
            } else {
-               const now = new Date().getTime(); const start = new Date(match.startTime).getTime(); const elapsed = now - start; const twoHours = 2*60*60*1000;
+               // No final result: auto-determine status based on time
+               const now = new Date().getTime(); 
+               const start = new Date(match.startTime).getTime(); 
+               const elapsed = now - start; 
+               const twoHours = 2*60*60*1000;
                if (elapsed < 0) { updateData.status = 'upcoming'; updateData.isLive = false; }
                else if (elapsed >= 0 && elapsed < twoHours) { updateData.status = 'live'; updateData.isLive = true; }
-               else { if (isLive !== undefined) updateData.isLive = isLive; if (status !== undefined) updateData.status = status; }
+               else { 
+                   if (isLive !== undefined) updateData.isLive = isLive; 
+                   if (status !== undefined) updateData.status = status; 
+               }
            }
+           
            const updated = await Match.findByIdAndUpdate(req.params.id, updateData, { new: true });
            res.json({ message: "Result updated.", match: updated });
        } catch (err) { res.status(500).send(); }
@@ -1326,17 +1351,24 @@ function isCacheFresh(cacheTime, ttl) {
    setInterval(async () => {
        try {
            const now = new Date();
+           
+           // Promote admin matches (no apiId) to live when start time arrives
            await Match.updateMany(
                { status: 'upcoming', startTime: { $lte: now }, $or: [{ apiId: { $exists: false } }, { apiId: null }] },
                { $set: { status: 'live', isLive: true } }
            );
+           
+           // Complete admin live matches after 2 hours
            const twoHoursAgo = new Date(now.getTime() - (2*60*60*1000));
            await Match.updateMany(
                { status: 'live', startTime: { $lte: twoHoursAgo }, $or: [{ apiId: { $exists: false } }, { apiId: null }] },
                { $set: { status: 'completed', isLive: false } }
            );
+           
+           // FIX: Auto-complete API matches immediately when start time passes
+           // (We don't track live API matches — they go straight to completed)
            await Match.updateMany(
-               { status: 'live', apiId: { $exists: true, $ne: null } },
+               { status: 'upcoming', apiId: { $exists: true, $ne: null }, startTime: { $lte: now } },
                { $set: { status: 'completed', isLive: false } }
            );
        } catch (err) { console.error("Status update error:", err.message); }
@@ -1431,10 +1463,12 @@ function isCacheFresh(cacheTime, ttl) {
        return { isWin, evaluatedAs, finalScore: finalScoreStr, hG, aG, winner };
    }
 
+   // FIX: Settlement runs every 30 seconds and uses STRICT time-based settlement
    setInterval(async () => {
        try {
            const now = new Date();
            const openBets = await Bet.find({ status: { $in: ['Open', 'Partial'] } }).populate('userId');
+           
            for (let bet of openBets) {
                let betUpdated = false, allSettled = true, hasLost = false;
 
@@ -1454,8 +1488,10 @@ function isCacheFresh(cacheTime, ttl) {
                        }
                    } catch(e){}
 
+                   // FIX: Strict 2-hour settlement from match kickoff
                    const settlementTime = new Date(new Date(leg.startTime).getTime() + (2*60*60*1000));
-                   const canSettle = (matchResult && matchResult.status === 'completed') || now >= settlementTime;
+                   const canSettle = now >= settlementTime;
+                   
                    if (!canSettle) { 
                        allSettled = false; 
                        continue; 
@@ -1530,7 +1566,7 @@ function isCacheFresh(cacheTime, ttl) {
                }
            }
        } catch (err) { console.error("Settlement error:", err.message); }
-   }, 30000); // FIX: Check every 30 seconds for faster settlement
+   }, 30000);
 
    /* =========================================================
       ODDS API HELPERS
