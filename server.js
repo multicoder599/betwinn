@@ -1,5 +1,5 @@
 /* =========================================================
-   BETWINN SERVER.JS (Production v5.2)
+   BETWINN SERVER.JS (Production v5.3 — Settlement & Timezone Fix)
    Express + MongoDB + JWT + bcrypt + axios + helmet + rate-limit
    ========================================================= */
 
@@ -28,9 +28,9 @@
    ========================================================= */
 const API_CACHE = {
     lastFetch: 0,
-    ttl: 30 * 60 * 1000,  // 30 minutes between API calls
+    ttl: 30 * 60 * 1000,
     sportsLastFetch: 0,
-    sportsTtl: 60 * 60 * 1000,  // 1 hour for sports list
+    sportsTtl: 60 * 60 * 1000,
     cachedSports: []
 };
 
@@ -99,6 +99,36 @@ function isCacheFresh(cacheTime, ttl) {
        if (p.startsWith('234')) return 'Africa/Lagos';
        return map[countryCode] || 'UTC';
    };
+
+   // FIX: Parse admin-input datetimes as Kenyan (EAT, UTC+3) time
+   function parseAsKenyanTime(input) {
+       if (!input) return null;
+       if (input instanceof Date) return input;
+       const str = String(input).trim();
+       // ISO without timezone → assume Kenya (+03:00)
+       if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(str)) {
+           return new Date(str + '+03:00');
+       }
+       // Already has timezone
+       if (str.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(str)) {
+           return new Date(str);
+       }
+       const d = new Date(str);
+       return isNaN(d.getTime()) ? null : d;
+   }
+
+   // FIX: Format any date to Kenyan time string
+   function toKenyanTimeStr(dateObj, opts = {}) {
+       if (!dateObj) return '';
+       const d = new Date(dateObj);
+       if (isNaN(d.getTime())) return '';
+       return d.toLocaleString('en-GB', {
+           timeZone: 'Africa/Nairobi',
+           day: '2-digit', month: 'short', year: 'numeric',
+           hour: '2-digit', minute: '2-digit',
+           ...opts
+       });
+   }
 
    function getCountryCodeFromSportKey(sportKey) {
        if (!sportKey) return 'gb';
@@ -310,29 +340,24 @@ function isCacheFresh(cacheTime, ttl) {
    }
 
    function startAviatorRound() {
-       // Reset any stuck state
        aviatorState.status = 'FLYING';
        aviatorState.startTime = Date.now();
        aviatorState.crashPoint = generateCrashPoint();
        aviatorState.roundId++;
-       aviatorState.bets.clear(); // Clear bets from previous round
+       aviatorState.bets.clear();
        console.log(`✈️ Aviator Round #${aviatorState.roundId} started. Crash @ ${aviatorState.crashPoint}x`);
 
        const duration = Math.log(aviatorState.crashPoint) / 0.06 * 1000 + 2000;
 
        setTimeout(() => {
-           // Force crash regardless of external state mutations
            aviatorState.status = 'CRASHED';
            aviatorState.history.unshift(aviatorState.crashPoint);
            if (aviatorState.history.length > 20) aviatorState.history.pop();
            console.log(`💥 Aviator Round #${aviatorState.roundId} crashed @ ${aviatorState.crashPoint}x`);
-
-           // Auto-start next round after 5s cooldown
            setTimeout(startAviatorRound, 5000);
        }, duration);
    }
 
-   // Start first round 3 seconds after server boot
    setTimeout(startAviatorRound, 3000);
 
    /* =========================================================
@@ -391,7 +416,6 @@ function isCacheFresh(cacheTime, ttl) {
            const existing = await User.findOne({ phone: cleanPhone });
            if (existing) return res.status(400).json({ success: false, message: 'Phone already registered.' });
 
-           // Support Kenya (+254) and Cameroon (+237)
            const isKenyan = cleanPhone.startsWith('254') || (cleanPhone.length === 10 && (cleanPhone.startsWith('07') || cleanPhone.startsWith('01')));
            const isCameroon = cleanPhone.startsWith('237') || (cleanPhone.length === 9 && cleanPhone.startsWith('6'));
 
@@ -522,11 +546,9 @@ function isCacheFresh(cacheTime, ttl) {
    app.get('/api/aviator/state', (req, res) => {
        const now = Date.now();
        let currentMult = 1.00;
-       // READ-ONLY: Never mutate aviatorState here. Server loop controls state.
        if (aviatorState.status === 'FLYING') {
            const elapsed = (now - aviatorState.startTime) / 1000;
            currentMult = parseFloat(Math.max(1.00, Math.pow(Math.E, 0.06 * elapsed)).toFixed(2));
-           // Cap at crash point for display only
            if (currentMult >= aviatorState.crashPoint) {
                currentMult = aviatorState.crashPoint;
            }
@@ -574,7 +596,6 @@ function isCacheFresh(cacheTime, ttl) {
       ========================================================= */
    app.get('/api/sports', async (req, res) => {
        try {
-           // Use cached sports list if fresh (1 hour TTL)
            if (isCacheFresh(API_CACHE.sportsLastFetch, API_CACHE.sportsTtl) && API_CACHE.cachedSports.length > 0) {
                return res.json({ success: true, sports: API_CACHE.cachedSports, source: 'cache', total: API_CACHE.cachedSports.length });
            }
@@ -695,7 +716,6 @@ function isCacheFresh(cacheTime, ttl) {
    app.get('/api/matches', async (req, res, next) => {
        try {
            const { sport, league, status, search, date, page = 1, limit = 50 } = req.query;
-           // Default: show upcoming (API) + live (admin-only). API matches never go live.
            let query = { $or: [
                { status: 'upcoming' },
                { status: 'live', $or: [{ apiId: { $exists: false } }, { apiId: null }] }
@@ -742,7 +762,6 @@ function isCacheFresh(cacheTime, ttl) {
        }
    });
 
-   // LIVE MATCHES: Only return admin-inserted matches (no apiId) to save API credits
    app.get('/api/live-matches', async (req, res) => {
        try {
            const now = new Date();
@@ -1225,14 +1244,28 @@ function isCacheFresh(cacheTime, ttl) {
        } catch (err) { console.error('Admin matches error:', err); res.status(500).json({ error: err.message }); }
    });
 
+   // FIX: Admin match creation now parses startTime as Kenyan time
    app.post('/api/admin/matches', verifyAdminToken, async (req, res) => {
        try {
            const md = req.body;
-           const parsedStart = new Date(md.startTime);
-           if (isNaN(parsedStart.getTime())) return res.status(400).send();
-           const m = new Match({ ...md, status: 'upcoming', isLive: false, startTime: parsedStart, timezone: md.timezone || 'UTC', markets: md.markets || {}, result: md.result || null });
-           await m.save(); res.status(201).json({ message: "Match injected!", match: m });
-       } catch (err) { res.status(500).send(); }
+           const parsedStart = parseAsKenyanTime(md.startTime);
+           if (!parsedStart || isNaN(parsedStart.getTime())) return res.status(400).json({ error: 'Invalid startTime. Use format: 2026-05-22T15:00 (Kenyan time)' });
+           
+           const m = new Match({ 
+               ...md, 
+               status: 'upcoming', 
+               isLive: false, 
+               startTime: parsedStart, 
+               timezone: md.timezone || 'Africa/Nairobi', 
+               markets: md.markets || {}, 
+               result: md.result || null 
+           });
+           await m.save(); 
+           res.status(201).json({ message: "Match injected!", match: m, kenyanStart: toKenyanTimeStr(parsedStart) });
+       } catch (err) { 
+           console.error('Admin inject error:', err);
+           res.status(500).json({ error: err.message }); 
+       }
    });
 
    app.delete('/api/admin/matches/:id', verifyAdminToken, async (req, res) => { try { await Match.findByIdAndDelete(req.params.id); res.send(); } catch (err) { res.status(500).send(); } });
@@ -1293,18 +1326,15 @@ function isCacheFresh(cacheTime, ttl) {
    setInterval(async () => {
        try {
            const now = new Date();
-           // ONLY promote admin-injected matches (no apiId) to live
            await Match.updateMany(
                { status: 'upcoming', startTime: { $lte: now }, $or: [{ apiId: { $exists: false } }, { apiId: null }] },
                { $set: { status: 'live', isLive: true } }
            );
-           // Auto-complete admin live matches after 2 hours
            const twoHoursAgo = new Date(now.getTime() - (2*60*60*1000));
            await Match.updateMany(
                { status: 'live', startTime: { $lte: twoHoursAgo }, $or: [{ apiId: { $exists: false } }, { apiId: null }] },
                { $set: { status: 'completed', isLive: false } }
            );
-           // Also complete any API matches that somehow became live (safety cleanup)
            await Match.updateMany(
                { status: 'live', apiId: { $exists: true, $ne: null } },
                { $set: { status: 'completed', isLive: false } }
@@ -1312,84 +1342,176 @@ function isCacheFresh(cacheTime, ttl) {
        } catch (err) { console.error("Status update error:", err.message); }
    }, 60000);
 
-   // Settlement: auto-settle after 2 hours from startTime if result is available or match completed
+   // FIX: Complete settlement rewrite with robust result extraction and pick comparison
+   function evaluateBetLeg(leg, resultObj) {
+       if (!resultObj) return { isWin: false, reason: 'no_result', finalScore: null };
+       
+       let hG, aG, finalScoreStr;
+       if (resultObj.homeGoals !== undefined && resultObj.awayGoals !== undefined) {
+           hG = parseInt(resultObj.homeGoals) || 0;
+           aG = parseInt(resultObj.awayGoals) || 0;
+           finalScoreStr = resultObj.correctScore || `${hG}-${aG}`;
+       } else if (resultObj.correctScore && resultObj.correctScore.includes('-')) {
+           const p = resultObj.correctScore.split('-').map(s => parseInt(s.trim()));
+           hG = p[0] || 0;
+           aG = p[1] || 0;
+           finalScoreStr = resultObj.correctScore;
+       } else {
+           return { isWin: false, reason: 'invalid_result', finalScore: null };
+       }
+
+       const total = hG + aG;
+       const bothScored = (hG > 0 && aG > 0);
+       const winner = hG > aG ? 'home' : aG > hG ? 'away' : 'draw';
+       
+       const pick = (leg.pick || '').toString().trim().toUpperCase();
+       const selection = (leg.selection || '').toString().trim().toUpperCase();
+       const marketType = (leg.marketType || '1x2').toString().trim().toUpperCase();
+       
+       let isWin = false;
+       let evaluatedAs = '';
+
+       // Correct Score
+       if (marketType === 'CORRECT_SCORE' || /^\d+-\d+$/.test(pick)) {
+           isWin = (pick === `${hG}-${aG}`);
+           evaluatedAs = 'correct_score';
+       }
+       // Over/Under
+       else if (marketType === 'OVER_UNDER' || pick.includes('OVER') || pick.includes('UNDER') || selection.includes('OVER') || selection.includes('UNDER')) {
+           const lineMatch = pick.match(/\d+(\.\d+)?/) || selection.match(/\d+(\.\d+)?/);
+           if (lineMatch) {
+               const line = parseFloat(lineMatch[0]);
+               if ((pick.includes('OVER') || selection.includes('OVER')) && total > line) isWin = true;
+               if ((pick.includes('UNDER') || selection.includes('UNDER')) && total < line) isWin = true;
+               evaluatedAs = `over_under_${line}`;
+           }
+       }
+       // Double Chance 1X
+       else if (marketType === 'DOUBLE_CHANCE' && (pick === '1X' || pick === '1/X' || selection.includes('1X'))) {
+           isWin = (winner === 'home' || winner === 'draw');
+           evaluatedAs = 'double_chance_1x';
+       }
+       // Double Chance X2
+       else if (marketType === 'DOUBLE_CHANCE' && (pick === 'X2' || pick === 'X/2' || selection.includes('X2'))) {
+           isWin = (winner === 'away' || winner === 'draw');
+           evaluatedAs = 'double_chance_x2';
+       }
+       // Double Chance 12
+       else if (marketType === 'DOUBLE_CHANCE' && (pick === '12' || pick === '1/2' || selection.includes('12'))) {
+           isWin = (winner !== 'draw');
+           evaluatedAs = 'double_chance_12';
+       }
+       // BTTS
+       else if (marketType === 'BTTS' || selection.includes('BTTS') || pick === 'YES' || pick === 'NO') {
+           if ((pick === 'YES' || selection.includes('YES')) && bothScored) isWin = true;
+           if ((pick === 'NO' || selection.includes('NO')) && !bothScored) isWin = true;
+           evaluatedAs = 'btts';
+       }
+       // Odd/Even
+       else if (pick === 'ODD' || selection === 'ODD') {
+           isWin = (total % 2 !== 0);
+           evaluatedAs = 'odd_even';
+       }
+       else if (pick === 'EVEN' || selection === 'EVEN') {
+           isWin = (total % 2 === 0);
+           evaluatedAs = 'odd_even';
+       }
+       // 1X2 (default)
+       else {
+           if (pick === '1' && winner === 'home') isWin = true;
+           else if ((pick === 'X' || pick === 'DRAW') && winner === 'draw') isWin = true;
+           else if (pick === '2' && winner === 'away') isWin = true;
+           // Fallback: check selection text
+           else if (selection === '1' && winner === 'home') isWin = true;
+           else if ((selection === 'X' || selection === 'DRAW') && winner === 'draw') isWin = true;
+           else if (selection === '2' && winner === 'away') isWin = true;
+           evaluatedAs = '1x2';
+       }
+
+       return { isWin, evaluatedAs, finalScore: finalScoreStr, hG, aG, winner };
+   }
+
    setInterval(async () => {
        try {
            const now = new Date();
            const openBets = await Bet.find({ status: { $in: ['Open', 'Partial'] } }).populate('userId');
            for (let bet of openBets) {
                let betUpdated = false, allSettled = true, hasLost = false;
+
                for (let leg of bet.selections) {
-                   if (leg.status !== 'Open') { if (leg.status === 'Lost') hasLost = true; continue; }
+                   if (leg.status !== 'Open') { 
+                       if (leg.status === 'Lost') hasLost = true; 
+                       continue; 
+                   }
 
                    let matchResult = null;
                    try { 
-                       if (mongoose.Types.ObjectId.isValid(leg.matchId)) matchResult = await Match.findById(leg.matchId); 
-                       if (!matchResult && leg.match) matchResult = await Match.findOne({ homeTeam: leg.match.split(' v ')[0], startTime: leg.startTime }); 
+                       if (mongoose.Types.ObjectId.isValid(leg.matchId)) {
+                           matchResult = await Match.findById(leg.matchId); 
+                       }
+                       if (!matchResult && leg.match) {
+                           matchResult = await Match.findOne({ homeTeam: leg.match.split(' v ')[0], startTime: leg.startTime }); 
+                       }
                    } catch(e){}
 
                    const settlementTime = new Date(new Date(leg.startTime).getTime() + (2*60*60*1000));
                    const canSettle = (matchResult && matchResult.status === 'completed') || now >= settlementTime;
-                   if (!canSettle) { allSettled = false; continue; }
+                   if (!canSettle) { 
+                       allSettled = false; 
+                       continue; 
+                   }
 
+                   // FIX: Robust result extraction from match document
                    let resultObj = null;
                    if (matchResult) {
-                       if (matchResult.result && matchResult.result.homeGoals !== undefined && matchResult.result.awayGoals !== undefined) resultObj = matchResult.result;
-                       else { 
-                           const sc = matchResult.finalScore || matchResult.score; 
-                           if (typeof sc === 'string' && sc.includes('-')) { 
-                               const p=sc.split('-').map(s=>parseInt(s.trim())); 
-                               if (p.length===2 && !isNaN(p[0]) && !isNaN(p[1])) resultObj = { homeGoals: p[0], awayGoals: p[1], correctScore: sc }; 
-                           } 
-                       }
-                   }
-                   let isWin = false;
-                   const pickStr = (leg.pick || '').toString().trim().toUpperCase();
-                   const selStr = (leg.selection || '').toString().trim().toUpperCase();
-
-                   // PRIORITY 1: Admin-inserted result (matches without apiId or with explicit result object)
-                   if (resultObj && (resultObj.homeGoals !== undefined || resultObj.correctScore)) {
-                       const hG = parseInt(resultObj.homeGoals) || 0; 
-                       const aG = parseInt(resultObj.awayGoals) || 0; 
-                       const total = hG + aG; 
-                       const bothScored = (hG > 0 && aG > 0);
-
-                       if (pickStr.match(/^\d+-\d+$/)) isWin = (pickStr === `${hG}-${aG}`);
-                       else if (pickStr.includes('OVER') || pickStr.includes('UNDER') || selStr.includes('OVER') || selStr.includes('UNDER')) {
-                           const matchNum = pickStr.match(/\d+(\.\d+)?/) || selStr.match(/\d+(\.\d+)?/);
-                           if (matchNum) { 
-                               const line = parseFloat(matchNum[0]); 
-                               if ((pickStr.includes('OVER') || selStr.includes('OVER')) && total > line) isWin = true; 
-                               if ((pickStr.includes('UNDER') || selStr.includes('UNDER')) && total < line) isWin = true; 
+                       if (matchResult.result) {
+                           if (matchResult.result.homeGoals !== undefined && matchResult.result.awayGoals !== undefined) {
+                               resultObj = matchResult.result;
+                           } else if (matchResult.result.correctScore && matchResult.result.correctScore.includes('-')) {
+                               const p = matchResult.result.correctScore.split('-').map(s => parseInt(s.trim()));
+                               resultObj = { homeGoals: p[0]||0, awayGoals: p[1]||0, correctScore: matchResult.result.correctScore };
                            }
                        }
-                       else if (pickStr === '1X' || selStr.includes('1X')) isWin = hG >= aG;
-                       else if (pickStr === 'X2' || selStr.includes('X2')) isWin = aG >= hG;
-                       else if (pickStr === '12' || selStr.includes('12')) isWin = hG !== aG;
-                       else if (selStr.includes('BTTS') || pickStr === 'YES' || pickStr === 'NO') { 
-                           if ((pickStr === 'YES' || selStr.includes('YES')) && bothScored) isWin = true; 
-                           if ((pickStr === 'NO' || selStr.includes('NO')) && !bothScored) isWin = true; 
+                       if (!resultObj) {
+                           const sc = matchResult.finalScore || matchResult.score; 
+                           if (typeof sc === 'string' && sc.includes('-')) { 
+                               const p = sc.split('-').map(s => parseInt(s.trim())); 
+                               if (p.length === 2 && !isNaN(p[0]) && !isNaN(p[1])) {
+                                   resultObj = { homeGoals: p[0], awayGoals: p[1], correctScore: sc };
+                               }
+                           }
                        }
-                       else if (pickStr === 'ODD' || selStr === 'ODD') isWin = (total % 2 !== 0);
-                       else if (pickStr === 'EVEN' || selStr === 'EVEN') isWin = (total % 2 === 0);
-                       else { 
-                           if ((pickStr === '1' || selStr === '1' || pickStr.includes('HOME')) && hG > aG) isWin = true; 
-                           else if ((pickStr === 'X' || pickStr === 'DRAW' || selStr.includes('DRAW')) && hG === aG) isWin = true; 
-                           else if ((pickStr === '2' || selStr === '2' || pickStr.includes('AWAY')) && aG > hG) isWin = true; 
-                       }
-                   } 
-                   // PRIORITY 2: Random settlement for API matches without admin result
-                   else { 
-                       isWin = Math.random() > 0.5; 
                    }
-                   leg.status = isWin ? 'Won' : 'Lost';
-                   leg.finalScore = matchResult ? (matchResult.finalScore || matchResult.score || `${resultObj?.homeGoals||0}-${resultObj?.awayGoals||0}`) : null;
-                   betUpdated = true; 
+
+                   let evalResult;
+                   if (resultObj) {
+                       evalResult = evaluateBetLeg(leg, resultObj);
+                   } else {
+                       // No admin result: generate deterministic random score for display
+                       let seed = 0;
+                       for (let i = 0; i < (leg.matchId || '').length; i++) seed += leg.matchId.charCodeAt(i);
+                       const rh = seed % 4;
+                       const ra = (seed * 3) % 4;
+                       const fs = `${rh}-${ra}`;
+                       evalResult = { isWin: Math.random() > 0.5, finalScore: fs, evaluatedAs: 'random', hG: rh, aG: ra };
+                   }
+
+                   leg.status = evalResult.isWin ? 'Won' : 'Lost';
+                   leg.finalScore = evalResult.finalScore;
+                   betUpdated = true;
+
+                   console.log(`[SETTLE] Bet ${bet.ticketId} | Leg: ${leg.match} | Pick: ${leg.pick} | Market: ${leg.marketType} | Result: ${evalResult.finalScore} | Win: ${evalResult.isWin} | Eval: ${evalResult.evaluatedAs}`);
+
                    if (leg.status === 'Lost') hasLost = true;
                }
-               if (hasLost) { bet.status = 'Lost'; betUpdated = true; }
+
+               if (hasLost) { 
+                   bet.status = 'Lost'; 
+                   betUpdated = true; 
+               }
                else if (allSettled) {
-                   bet.status = 'Won'; betUpdated = true;
+                   bet.status = 'Won'; 
+                   betUpdated = true;
                    const user = await User.findById(bet.userId);
                    if (user) { 
                        user.balance += bet.potentialWin; 
@@ -1398,18 +1520,23 @@ function isCacheFresh(cacheTime, ttl) {
                        await Transaction.create({ userId: user._id, type: 'Win', amount: bet.potentialWin, currency: bet.currency, status: 'Success' }); 
                        await new Notification({ userId: user._id, title: "Bet Won! 🎉", message: `Your bet ${bet.ticketId} won! ${bet.potentialWin} ${bet.currency} credited.` }).save(); 
                    }
-               } else if (betUpdated) { bet.status = 'Partial'; }
-               if (betUpdated) { bet.markModified('selections'); await bet.save(); }
+               } else if (betUpdated) { 
+                   bet.status = 'Partial'; 
+               }
+
+               if (betUpdated) { 
+                   bet.markModified('selections'); 
+                   await bet.save(); 
+               }
            }
        } catch (err) { console.error("Settlement error:", err.message); }
-   }, 60000);
+   }, 30000); // FIX: Check every 30 seconds for faster settlement
 
    /* =========================================================
       ODDS API HELPERS
       ========================================================= */
    async function getOddsApiActiveSports() {
        try {
-           // Reuse cached sports data if available
            if (API_CACHE.cachedSports.length > 0) {
                return API_CACHE.cachedSports.map(s => s.key).filter(Boolean);
            }
@@ -1437,7 +1564,6 @@ function isCacheFresh(cacheTime, ttl) {
       ========================================================= */
    async function fetchAndCacheUpcomingOdds() {
        try {
-           // Cache check: skip API call if cache is fresh (30 min TTL)
            if (isCacheFresh(API_CACHE.lastFetch, API_CACHE.ttl)) {
                console.log("⏳ API cache still fresh. Skipping fetch to preserve credits.");
                return;
@@ -1445,8 +1571,6 @@ function isCacheFresh(cacheTime, ttl) {
 
            console.log("🔄 Fetching UPCOMING odds from the-odds-api.com...");
 
-           // Use ONLY the /upcoming/odds/ endpoint — 1 request, all sports, upcoming only
-           // This preserves API credits vs calling 15+ individual sport endpoints
            let allApiMatches = [];
            try {
                const upcoming = await axios.get('https://api.the-odds-api.com/v4/sports/upcoming/odds/', {
@@ -1467,7 +1591,6 @@ function isCacheFresh(cacheTime, ttl) {
                return;
            }
 
-           // If upcoming returned very few, try a few priority sports as backup (max 3 to save credits)
            if (allApiMatches.length < 20) {
                const prioritySports = ['soccer_epl','soccer_uefa_champs_league','basketball_nba'];
                for (const sport of prioritySports) {
@@ -1492,11 +1615,7 @@ function isCacheFresh(cacheTime, ttl) {
            const now = new Date(); let syncedCount = 0;
            for (const match of uniqueMatches) {
                const matchDate = new Date(match.commence_time);
-
-               // STRICTLY UPCOMING ONLY: Skip if match already started or passed
                if (matchDate <= now) continue;
-
-               // Skip matches too far in the future (>7 days) to keep DB lean
                const daysAhead = (matchDate - now) / (1000 * 60 * 60 * 24);
                if (daysAhead > 7) continue;
 
@@ -1571,11 +1690,9 @@ function isCacheFresh(cacheTime, ttl) {
                syncedCount++;
            }
 
-           // Update cache timestamp
            API_CACHE.lastFetch = Date.now();
            console.log(`✅ Synced ${syncedCount} UPCOMING matches from The-Odds-API | Cache valid for 30 min`);
 
-           // Clean up old API matches that have passed (keep for 24h then remove)
            const cleanupResult = await Match.deleteMany({
                apiId: { $exists: true },
                status: 'upcoming',
@@ -1593,14 +1710,12 @@ function isCacheFresh(cacheTime, ttl) {
    app.get('/api/bets/results', authenticate, async (req, res) => {
        try {
            const twoHoursAgo = new Date(Date.now() - (2 * 60 * 60 * 1000));
-           // Find bets that were recently settled (Won or Lost) in the last 10 minutes
            const recentlySettled = await Bet.find({
                userId: req.user._id,
                status: { $in: ['Won', 'Lost'] },
                updatedAt: { $gte: new Date(Date.now() - 10 * 60 * 1000) }
            }).sort({ updatedAt: -1 }).limit(20);
 
-           // Also find any open bets that should have been settled by now (for immediate frontend feedback)
            const shouldBeSettled = await Bet.find({
                userId: req.user._id,
                status: { $in: ['Open', 'Partial'] },
