@@ -1,5 +1,5 @@
 /* =========================================================
-   BETWINN SERVER.JS (Production v5.4 — Settlement & Lifecycle Fix)
+   BETWINN SERVER.JS (Production v5.6 — Settlement + Top Games Fix)
    Express + MongoDB + JWT + bcrypt + axios + helmet + rate-limit
    ========================================================= */
 
@@ -100,16 +100,13 @@ function isCacheFresh(cacheTime, ttl) {
        return map[countryCode] || 'UTC';
    };
 
-   // FIX: Parse admin-input datetimes as Kenyan (EAT, UTC+3) time
    function parseAsKenyanTime(input) {
        if (!input) return null;
        if (input instanceof Date) return input;
        const str = String(input).trim();
-       // ISO without timezone → assume Kenya (+03:00)
        if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(str)) {
            return new Date(str + '+03:00');
        }
-       // Already has timezone
        if (str.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(str)) {
            return new Date(str);
        }
@@ -117,7 +114,6 @@ function isCacheFresh(cacheTime, ttl) {
        return isNaN(d.getTime()) ? null : d;
    }
 
-   // FIX: Format any date to Kenyan time string
    function toKenyanTimeStr(dateObj, opts = {}) {
        if (!dateObj) return '';
        const d = new Date(dateObj);
@@ -716,7 +712,6 @@ function isCacheFresh(cacheTime, ttl) {
    app.get('/api/matches', async (req, res, next) => {
        try {
            const { sport, league, status, search, date, page = 1, limit = 50 } = req.query;
-           // FIX: Only show upcoming matches + admin live matches. API matches are auto-completed at kickoff.
            let query = { $or: [
                { status: 'upcoming' },
                { status: 'live', $or: [{ apiId: { $exists: false } }, { apiId: null }] }
@@ -1230,7 +1225,6 @@ function isCacheFresh(cacheTime, ttl) {
        } catch (err) { res.status(500).send(); }
    });
 
-   // FIX: Return ALL matches (upcoming, live, completed) so admin Results view works
    app.get('/api/admin/matches', verifyAdminToken, async (req, res) => {
        try {
            let query = {};
@@ -1251,13 +1245,13 @@ function isCacheFresh(cacheTime, ttl) {
        } catch (err) { console.error('Admin matches error:', err); res.status(500).json({ error: err.message }); }
    });
 
-   // FIX: Admin match creation now parses startTime as Kenyan time
    app.post('/api/admin/matches', verifyAdminToken, async (req, res) => {
        try {
            const md = req.body;
            const parsedStart = parseAsKenyanTime(md.startTime);
            if (!parsedStart || isNaN(parsedStart.getTime())) return res.status(400).json({ error: 'Invalid startTime. Use format: 2026-05-22T15:00 (Kenyan time)' });
            
+           /* FIX: Admin matches default to featured=true so they appear in top games */
            const m = new Match({ 
                ...md, 
                status: 'upcoming', 
@@ -1265,7 +1259,8 @@ function isCacheFresh(cacheTime, ttl) {
                startTime: parsedStart, 
                timezone: md.timezone || 'Africa/Nairobi', 
                markets: md.markets || {}, 
-               result: md.result || null 
+               result: md.result || null,
+               featured: md.featured !== undefined ? md.featured : true
            });
            await m.save(); 
            res.status(201).json({ message: "Match injected!", match: m, kenyanStart: toKenyanTimeStr(parsedStart) });
@@ -1288,7 +1283,79 @@ function isCacheFresh(cacheTime, ttl) {
        } catch (err) { res.status(500).send(); }
    });
 
-   // FIX: Setting a final result ALWAYS marks match completed, regardless of elapsed time
+   /* =========================================================
+      IMMEDIATE BET SETTLEMENT HELPER
+      ========================================================= */
+   async function settleBetsForMatch(matchId, resultObj) {
+       if (!resultObj || !resultObj.correctScore) {
+           console.log(`[SETTLE] No valid result for match ${matchId}, skipping immediate settlement.`);
+           return;
+       }
+       
+       console.log(`[SETTLE] Immediate settlement for match ${matchId} | Result: ${resultObj.correctScore}`);
+       
+       const openBets = await Bet.find({ 
+           status: { $in: ['Open', 'Partial'] },
+           'selections.matchId': matchId
+       }).populate('userId');
+       
+       if (openBets.length === 0) {
+           console.log(`[SETTLE] No open bets for match ${matchId}`);
+           return;
+       }
+       
+       for (let bet of openBets) {
+           let betUpdated = false, allSettled = true, hasLost = false;
+
+           for (let leg of bet.selections) {
+               if (leg.status !== 'Open') { 
+                   if (leg.status === 'Lost') hasLost = true; 
+                   continue; 
+               }
+
+               if (leg.matchId !== matchId) {
+                   allSettled = false;
+                   continue;
+               }
+
+               const evalResult = evaluateBetLeg(leg, resultObj);
+               leg.status = evalResult.isWin ? 'Won' : 'Lost';
+               leg.finalScore = evalResult.finalScore;
+               betUpdated = true;
+
+               console.log(`[SETTLE] Bet ${bet.ticketId} | ${leg.match} | Pick: ${leg.pick} | Result: ${evalResult.finalScore} | Win: ${evalResult.isWin}`);
+
+               if (leg.status === 'Lost') hasLost = true;
+           }
+
+           if (hasLost) { 
+               bet.status = 'Lost'; 
+               betUpdated = true; 
+           } else if (allSettled) {
+               bet.status = 'Won'; 
+               betUpdated = true;
+               const user = await User.findById(bet.userId);
+               if (user) { 
+                   user.balance += bet.potentialWin; 
+                   user.totalWon = (user.totalWon || 0) + bet.potentialWin;
+                   await user.save(); 
+                   await Transaction.create({ userId: user._id, type: 'Win', amount: bet.potentialWin, currency: bet.currency, status: 'Success' }); 
+                   await new Notification({ userId: user._id, title: "Bet Won! 🎉", message: `Your bet ${bet.ticketId} won! ${bet.potentialWin} ${bet.currency} credited.` }).save(); 
+               }
+           } else if (betUpdated) { 
+               bet.status = 'Partial'; 
+           }
+
+           if (betUpdated) { 
+               bet.markModified('selections'); 
+               await bet.save(); 
+           }
+       }
+   }
+
+   /* =========================================================
+      ADMIN RESULT SETTING (FIXED — No Immediate Completion)
+      ========================================================= */
    app.put('/api/admin/matches/:id/result', verifyAdminToken, async (req, res) => {
        try {
            const { score, finalScore, result, isLive, status } = req.body;
@@ -1299,12 +1366,23 @@ function isCacheFresh(cacheTime, ttl) {
            let isSettingFinalResult = false;
            if (result !== undefined) {
                if (typeof result === 'string' && result.includes('-')) {
+                   updateData.score = result;
+                   updateData.finalScore = result;
                    const [h,a] = result.split('-').map(s=>parseInt(s.trim()));
                    updateData.result = { homeGoals: h||0, awayGoals: a||0, correctScore: result, winner: h>a?'home':a>h?'away':'draw' };
                    isSettingFinalResult = true;
                } else if (typeof result === 'object' && result !== null) {
                    const h=parseInt(result.homeGoals), a=parseInt(result.awayGoals);
-                   updateData.result = { homeGoals: isNaN(h)?0:h, awayGoals: isNaN(a)?0:a, correctScore: result.correctScore||`${h}-${a}`, btts: result.btts, winner: result.winner||(h>a?'home':a>h?'away':'draw') };
+                   const correctScore = result.correctScore || `${isNaN(h)?0:h}-${isNaN(a)?0:a}`;
+                   updateData.score = correctScore;
+                   updateData.finalScore = correctScore;
+                   updateData.result = { 
+                       homeGoals: isNaN(h)?0:h, 
+                       awayGoals: isNaN(a)?0:a, 
+                       correctScore: correctScore, 
+                       btts: result.btts, 
+                       winner: result.winner||(h>a?'home':a>h?'away':'draw') 
+                   };
                    if (result.correctScore || result.homeGoals !== undefined) isSettingFinalResult = true;
                } else { updateData.result = result; }
            }
@@ -1322,59 +1400,96 @@ function isCacheFresh(cacheTime, ttl) {
            const match = await Match.findById(req.params.id);
            if (!match) return res.status(404).json({ error: "Match not found." });
 
-           // FIX: If admin is setting a final result, ALWAYS mark as completed immediately
-           if (isSettingFinalResult) {
-               updateData.status = 'completed';
-               updateData.isLive = false;
-           } else {
-               // No final result: auto-determine status based on time
-               const now = new Date().getTime(); 
-               const start = new Date(match.startTime).getTime(); 
-               const elapsed = now - start; 
-               const twoHours = 2*60*60*1000;
-               if (elapsed < 0) { updateData.status = 'upcoming'; updateData.isLive = false; }
-               else if (elapsed >= 0 && elapsed < twoHours) { updateData.status = 'live'; updateData.isLive = true; }
-               else { 
+           /* FIX: Time-based status logic for ALL updates including result setting.
+              Match stays live during the 2-hour window even after result is set. */
+           const now = new Date().getTime(); 
+           const start = new Date(match.startTime).getTime(); 
+           const elapsed = now - start; 
+           const twoHours = 2*60*60*1000;
+           
+           if (elapsed < 0) { 
+               updateData.status = 'upcoming'; 
+               updateData.isLive = false; 
+           }
+           else if (elapsed >= 0 && elapsed < twoHours) { 
+               updateData.status = 'live'; 
+               updateData.isLive = true; 
+           }
+           else { 
+               // Only auto-complete if 2+ hours passed AND result is being set
+               if (isSettingFinalResult) {
+                   updateData.status = 'completed';
+                   updateData.isLive = false;
+               } else {
                    if (isLive !== undefined) updateData.isLive = isLive; 
-                   if (status !== undefined) updateData.status = status; 
+                   if (status !== undefined) updateData.status = status;
                }
            }
            
            const updated = await Match.findByIdAndUpdate(req.params.id, updateData, { new: true });
+           
+           // FIX: Immediately settle all open bets for this match
+           if (isSettingFinalResult && updated.result) {
+               await settleBetsForMatch(req.params.id, updated.result);
+           }
+           
            res.json({ message: "Result updated.", match: updated });
-       } catch (err) { res.status(500).send(); }
+       } catch (err) { 
+           console.error('Admin result error:', err);
+           res.status(500).json({ error: err.message }); 
+       }
    });
 
    /* =========================================================
-      BACKGROUND WORKERS (SMART SETTLEMENT & SIMULATION)
+      BACKGROUND WORKERS (FIXED SETTLEMENT)
       ========================================================= */
    setInterval(async () => {
        try {
            const now = new Date();
            
-           // Promote admin matches (no apiId) to live when start time arrives
+           // Promote admin matches to live when start time arrives
            await Match.updateMany(
                { status: 'upcoming', startTime: { $lte: now }, $or: [{ apiId: { $exists: false } }, { apiId: null }] },
                { $set: { status: 'live', isLive: true } }
            );
            
-           // Complete admin live matches after 2 hours
+           // FIX: Only complete admin matches after 2 hours IF admin result is already set
            const twoHoursAgo = new Date(now.getTime() - (2*60*60*1000));
            await Match.updateMany(
-               { status: 'live', startTime: { $lte: twoHoursAgo }, $or: [{ apiId: { $exists: false } }, { apiId: null }] },
+               { 
+                   status: 'live', 
+                   startTime: { $lte: twoHoursAgo }, 
+                   $or: [{ apiId: { $exists: false } }, { apiId: null }],
+                   'result.correctScore': { $exists: true, $ne: null, $ne: '' }
+               },
+               { $set: { status: 'completed', isLive: false } }
+           );
+
+           // FALLBACK: Force-complete admin matches after 24h even without result
+           const oneDayAgo = new Date(now.getTime() - (24*60*60*1000));
+           await Match.updateMany(
+               { 
+                   status: 'live', 
+                   startTime: { $lte: oneDayAgo }, 
+                   $or: [{ apiId: { $exists: false } }, { apiId: null }]
+               },
                { $set: { status: 'completed', isLive: false } }
            );
            
-           // FIX: Auto-complete API matches immediately when start time passes
-           // (We don't track live API matches — they go straight to completed)
+           // Auto-complete API matches immediately when start time passes
            await Match.updateMany(
                { status: 'upcoming', apiId: { $exists: true, $ne: null }, startTime: { $lte: now } },
+               { $set: { status: 'completed', isLive: false } }
+           );
+
+           // Safety: complete any API matches stuck in live status
+           await Match.updateMany(
+               { status: 'live', apiId: { $exists: true, $ne: null }, startTime: { $lte: now } },
                { $set: { status: 'completed', isLive: false } }
            );
        } catch (err) { console.error("Status update error:", err.message); }
    }, 60000);
 
-   // FIX: Complete settlement rewrite with robust result extraction and pick comparison
    function evaluateBetLeg(leg, resultObj) {
        if (!resultObj) return { isWin: false, reason: 'no_result', finalScore: null };
        
@@ -1403,12 +1518,10 @@ function isCacheFresh(cacheTime, ttl) {
        let isWin = false;
        let evaluatedAs = '';
 
-       // Correct Score
        if (marketType === 'CORRECT_SCORE' || /^\d+-\d+$/.test(pick)) {
            isWin = (pick === `${hG}-${aG}`);
            evaluatedAs = 'correct_score';
        }
-       // Over/Under
        else if (marketType === 'OVER_UNDER' || pick.includes('OVER') || pick.includes('UNDER') || selection.includes('OVER') || selection.includes('UNDER')) {
            const lineMatch = pick.match(/\d+(\.\d+)?/) || selection.match(/\d+(\.\d+)?/);
            if (lineMatch) {
@@ -1418,28 +1531,23 @@ function isCacheFresh(cacheTime, ttl) {
                evaluatedAs = `over_under_${line}`;
            }
        }
-       // Double Chance 1X
        else if (marketType === 'DOUBLE_CHANCE' && (pick === '1X' || pick === '1/X' || selection.includes('1X'))) {
            isWin = (winner === 'home' || winner === 'draw');
            evaluatedAs = 'double_chance_1x';
        }
-       // Double Chance X2
        else if (marketType === 'DOUBLE_CHANCE' && (pick === 'X2' || pick === 'X/2' || selection.includes('X2'))) {
            isWin = (winner === 'away' || winner === 'draw');
            evaluatedAs = 'double_chance_x2';
        }
-       // Double Chance 12
        else if (marketType === 'DOUBLE_CHANCE' && (pick === '12' || pick === '1/2' || selection.includes('12'))) {
            isWin = (winner !== 'draw');
            evaluatedAs = 'double_chance_12';
        }
-       // BTTS
        else if (marketType === 'BTTS' || selection.includes('BTTS') || pick === 'YES' || pick === 'NO') {
            if ((pick === 'YES' || selection.includes('YES')) && bothScored) isWin = true;
            if ((pick === 'NO' || selection.includes('NO')) && !bothScored) isWin = true;
            evaluatedAs = 'btts';
        }
-       // Odd/Even
        else if (pick === 'ODD' || selection === 'ODD') {
            isWin = (total % 2 !== 0);
            evaluatedAs = 'odd_even';
@@ -1448,12 +1556,10 @@ function isCacheFresh(cacheTime, ttl) {
            isWin = (total % 2 === 0);
            evaluatedAs = 'odd_even';
        }
-       // 1X2 (default)
        else {
            if (pick === '1' && winner === 'home') isWin = true;
            else if ((pick === 'X' || pick === 'DRAW') && winner === 'draw') isWin = true;
            else if (pick === '2' && winner === 'away') isWin = true;
-           // Fallback: check selection text
            else if (selection === '1' && winner === 'home') isWin = true;
            else if ((selection === 'X' || selection === 'DRAW') && winner === 'draw') isWin = true;
            else if (selection === '2' && winner === 'away') isWin = true;
@@ -1463,7 +1569,6 @@ function isCacheFresh(cacheTime, ttl) {
        return { isWin, evaluatedAs, finalScore: finalScoreStr, hG, aG, winner };
    }
 
-   // FIX: Settlement runs every 30 seconds and uses STRICT time-based settlement
    setInterval(async () => {
        try {
            const now = new Date();
@@ -1488,7 +1593,6 @@ function isCacheFresh(cacheTime, ttl) {
                        }
                    } catch(e){}
 
-                   // FIX: Strict 2-hour settlement from match kickoff
                    const settlementTime = new Date(new Date(leg.startTime).getTime() + (2*60*60*1000));
                    const canSettle = now >= settlementTime;
                    
@@ -1497,21 +1601,14 @@ function isCacheFresh(cacheTime, ttl) {
                        continue; 
                    }
 
-                   // FIX: Robust result extraction from match document
                    let resultObj = null;
                    if (matchResult) {
-                       if (matchResult.result) {
-                           if (matchResult.result.homeGoals !== undefined && matchResult.result.awayGoals !== undefined) {
-                               resultObj = matchResult.result;
-                           } else if (matchResult.result.correctScore && matchResult.result.correctScore.includes('-')) {
-                               const p = matchResult.result.correctScore.split('-').map(s => parseInt(s.trim()));
-                               resultObj = { homeGoals: p[0]||0, awayGoals: p[1]||0, correctScore: matchResult.result.correctScore };
-                           }
-                       }
-                       if (!resultObj) {
-                           const sc = matchResult.finalScore || matchResult.score; 
-                           if (typeof sc === 'string' && sc.includes('-')) { 
-                               const p = sc.split('-').map(s => parseInt(s.trim())); 
+                       if (matchResult.result && matchResult.result.correctScore) {
+                           resultObj = matchResult.result;
+                       } else if (matchResult.finalScore || matchResult.score) {
+                           const sc = matchResult.finalScore || matchResult.score;
+                           if (typeof sc === 'string' && sc.includes('-')) {
+                               const p = sc.split('-').map(s => parseInt(s.trim()));
                                if (p.length === 2 && !isNaN(p[0]) && !isNaN(p[1])) {
                                    resultObj = { homeGoals: p[0], awayGoals: p[1], correctScore: sc };
                                }
@@ -1519,24 +1616,19 @@ function isCacheFresh(cacheTime, ttl) {
                        }
                    }
 
-                   let evalResult;
-                   if (resultObj) {
-                       evalResult = evaluateBetLeg(leg, resultObj);
-                   } else {
-                       // No admin result: generate deterministic random score for display
-                       let seed = 0;
-                       for (let i = 0; i < (leg.matchId || '').length; i++) seed += leg.matchId.charCodeAt(i);
-                       const rh = seed % 4;
-                       const ra = (seed * 3) % 4;
-                       const fs = `${rh}-${ra}`;
-                       evalResult = { isWin: Math.random() > 0.5, finalScore: fs, evaluatedAs: 'random', hG: rh, aG: ra };
+                   if (!resultObj) {
+                       // FIX: Do NOT randomly settle. Keep open until admin sets result.
+                       console.log(`[SETTLE] Bet ${bet.ticketId} | ${leg.match} | No admin result yet. Waiting.`);
+                       allSettled = false;
+                       continue;
                    }
 
+                   const evalResult = evaluateBetLeg(leg, resultObj);
                    leg.status = evalResult.isWin ? 'Won' : 'Lost';
                    leg.finalScore = evalResult.finalScore;
                    betUpdated = true;
 
-                   console.log(`[SETTLE] Bet ${bet.ticketId} | Leg: ${leg.match} | Pick: ${leg.pick} | Market: ${leg.marketType} | Result: ${evalResult.finalScore} | Win: ${evalResult.isWin} | Eval: ${evalResult.evaluatedAs}`);
+                   console.log(`[SETTLE] Bet ${bet.ticketId} | ${leg.match} | Pick: ${leg.pick} | Market: ${leg.marketType} | Result: ${evalResult.finalScore} | Win: ${evalResult.isWin} | Eval: ${evalResult.evaluatedAs}`);
 
                    if (leg.status === 'Lost') hasLost = true;
                }
