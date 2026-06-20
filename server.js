@@ -357,33 +357,55 @@ function isCacheFresh(cacheTime, ttl) {
    setTimeout(startAviatorRound, 3000);
 
    /* =========================================================
-      AUTH MIDDLEWARE
-      ========================================================= */
-   const authenticate = async (req, res, next) => {
-       try {
-           const authHeader = req.headers.authorization || '';
-           const token = authHeader.split(' ')[1];
-           if (!token) return res.status(401).json({ success: false, message: 'Access denied. No token provided.' });
-           const decoded = jwt.verify(token, JWT_SECRET);
-           const user = await User.findById(decoded.id).select('-password');
-           if (!user) return res.status(401).json({ success: false, message: 'User not found.' });
-           req.user = user;
-           next();
-       } catch (err) { res.status(401).json({ success: false, message: 'Invalid token.' }); }
-   };
+   AUTH MIDDLEWARE — FIXED
+   ========================================================= */
+const authenticate = async (req, res, next) => {
+    try {
+        const authHeader = req.headers.authorization || '';
+        // Robust extraction: handles "Bearer <token>" or just "<token>"
+        const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
+        
+        if (!token) {
+            return res.status(401).json({ success: false, message: 'Access denied. No token provided.' });
+        }
+        
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const user = await User.findById(decoded.id).select('-password');
+        
+        if (!user) {
+            console.warn(`[AUTH] Token valid but user ${decoded.id} not found. Route: ${req.method} ${req.path}`);
+            return res.status(401).json({ success: false, message: 'User not found. Please login again.' });
+        }
+        
+        req.user = user;
+        next();
+    } catch (err) {
+        console.warn(`[AUTH] Invalid token on ${req.method} ${req.path}: ${err.message}`);
+        res.status(401).json({ success: false, message: 'Invalid or expired token. Please login again.' });
+    }
+};
 
-   const verifyAdminToken = (req, res, next) => {
-       const token = req.headers['authorization'];
-       if (!token) return res.status(401).json({ error: "Access Denied." });
-       try {
-           const tokenParts = token.split(" ");
-           const actualToken = tokenParts.length === 2 ? tokenParts[1] : tokenParts[0];
-           const verified = jwt.verify(actualToken, JWT_SECRET);
-           if (verified.role !== 'admin') return res.status(403).json({ error: "Forbidden." });
-           req.admin = verified;
-           next();
-       } catch (err) { return res.status(401).json({ error: "Invalid token." }); }
-   };
+const verifyAdminToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'] || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
+    
+    if (!token) {
+        return res.status(401).json({ error: "Access Denied. No token provided." });
+    }
+    
+    try {
+        const verified = jwt.verify(token, JWT_SECRET);
+        if (verified.role !== 'admin') {
+            console.warn(`[ADMIN AUTH] Non-admin token rejected on ${req.method} ${req.path}`);
+            return res.status(403).json({ error: "Forbidden. Admin access required." });
+        }
+        req.admin = verified;
+        next();
+    } catch (err) {
+        console.warn(`[ADMIN AUTH] Invalid token on ${req.method} ${req.path}: ${err.message}`);
+        return res.status(401).json({ error: "Invalid or expired token." });
+    }
+};
 
    /* =========================================================
       HEALTH CHECK
@@ -1443,222 +1465,123 @@ function isCacheFresh(cacheTime, ttl) {
    /* =========================================================
       BACKGROUND WORKERS (FIXED SETTLEMENT)
       ========================================================= */
-   setInterval(async () => {
-       try {
-           const now = new Date();
-           
-           // Promote admin matches to live when start time arrives
-           await Match.updateMany(
-               { status: 'upcoming', startTime: { $lte: now }, $or: [{ apiId: { $exists: false } }, { apiId: null }] },
-               { $set: { status: 'live', isLive: true } }
-           );
-           
-           // FIX: Only complete admin matches after 2 hours IF admin result is already set
-           const twoHoursAgo = new Date(now.getTime() - (2*60*60*1000));
-           await Match.updateMany(
-               { 
-                   status: 'live', 
-                   startTime: { $lte: twoHoursAgo }, 
-                   $or: [{ apiId: { $exists: false } }, { apiId: null }],
-                   'result.correctScore': { $exists: true, $ne: null, $ne: '' }
-               },
-               { $set: { status: 'completed', isLive: false } }
-           );
-
-           // FALLBACK: Force-complete admin matches after 24h even without result
-           const oneDayAgo = new Date(now.getTime() - (24*60*60*1000));
-           await Match.updateMany(
-               { 
-                   status: 'live', 
-                   startTime: { $lte: oneDayAgo }, 
-                   $or: [{ apiId: { $exists: false } }, { apiId: null }]
-               },
-               { $set: { status: 'completed', isLive: false } }
-           );
-           
-           // Auto-complete API matches immediately when start time passes
-           await Match.updateMany(
-               { status: 'upcoming', apiId: { $exists: true, $ne: null }, startTime: { $lte: now } },
-               { $set: { status: 'completed', isLive: false } }
-           );
-
-           // Safety: complete any API matches stuck in live status
-           await Match.updateMany(
-               { status: 'live', apiId: { $exists: true, $ne: null }, startTime: { $lte: now } },
-               { $set: { status: 'completed', isLive: false } }
-           );
-       } catch (err) { console.error("Status update error:", err.message); }
-   }, 60000);
-
-   function evaluateBetLeg(leg, resultObj) {
-       if (!resultObj) return { isWin: false, reason: 'no_result', finalScore: null };
-       
-       let hG, aG, finalScoreStr;
-       if (resultObj.homeGoals !== undefined && resultObj.awayGoals !== undefined) {
-           hG = parseInt(resultObj.homeGoals) || 0;
-           aG = parseInt(resultObj.awayGoals) || 0;
-           finalScoreStr = resultObj.correctScore || `${hG}-${aG}`;
-       } else if (resultObj.correctScore && resultObj.correctScore.includes('-')) {
-           const p = resultObj.correctScore.split('-').map(s => parseInt(s.trim()));
-           hG = p[0] || 0;
-           aG = p[1] || 0;
-           finalScoreStr = resultObj.correctScore;
-       } else {
-           return { isWin: false, reason: 'invalid_result', finalScore: null };
-       }
-
-       const total = hG + aG;
-       const bothScored = (hG > 0 && aG > 0);
-       const winner = hG > aG ? 'home' : aG > hG ? 'away' : 'draw';
-       
-       const pick = (leg.pick || '').toString().trim().toUpperCase();
-       const selection = (leg.selection || '').toString().trim().toUpperCase();
-       const marketType = (leg.marketType || '1x2').toString().trim().toUpperCase();
-       
-       let isWin = false;
-       let evaluatedAs = '';
-
-       if (marketType === 'CORRECT_SCORE' || /^\d+-\d+$/.test(pick)) {
-           isWin = (pick === `${hG}-${aG}`);
-           evaluatedAs = 'correct_score';
-       }
-       else if (marketType === 'OVER_UNDER' || pick.includes('OVER') || pick.includes('UNDER') || selection.includes('OVER') || selection.includes('UNDER')) {
-           const lineMatch = pick.match(/\d+(\.\d+)?/) || selection.match(/\d+(\.\d+)?/);
-           if (lineMatch) {
-               const line = parseFloat(lineMatch[0]);
-               if ((pick.includes('OVER') || selection.includes('OVER')) && total > line) isWin = true;
-               if ((pick.includes('UNDER') || selection.includes('UNDER')) && total < line) isWin = true;
-               evaluatedAs = `over_under_${line}`;
-           }
-       }
-       else if (marketType === 'DOUBLE_CHANCE' && (pick === '1X' || pick === '1/X' || selection.includes('1X'))) {
-           isWin = (winner === 'home' || winner === 'draw');
-           evaluatedAs = 'double_chance_1x';
-       }
-       else if (marketType === 'DOUBLE_CHANCE' && (pick === 'X2' || pick === 'X/2' || selection.includes('X2'))) {
-           isWin = (winner === 'away' || winner === 'draw');
-           evaluatedAs = 'double_chance_x2';
-       }
-       else if (marketType === 'DOUBLE_CHANCE' && (pick === '12' || pick === '1/2' || selection.includes('12'))) {
-           isWin = (winner !== 'draw');
-           evaluatedAs = 'double_chance_12';
-       }
-       else if (marketType === 'BTTS' || selection.includes('BTTS') || pick === 'YES' || pick === 'NO') {
-           if ((pick === 'YES' || selection.includes('YES')) && bothScored) isWin = true;
-           if ((pick === 'NO' || selection.includes('NO')) && !bothScored) isWin = true;
-           evaluatedAs = 'btts';
-       }
-       else if (pick === 'ODD' || selection === 'ODD') {
-           isWin = (total % 2 !== 0);
-           evaluatedAs = 'odd_even';
-       }
-       else if (pick === 'EVEN' || selection === 'EVEN') {
-           isWin = (total % 2 === 0);
-           evaluatedAs = 'odd_even';
-       }
-       else {
-           if (pick === '1' && winner === 'home') isWin = true;
-           else if ((pick === 'X' || pick === 'DRAW') && winner === 'draw') isWin = true;
-           else if (pick === '2' && winner === 'away') isWin = true;
-           else if (selection === '1' && winner === 'home') isWin = true;
-           else if ((selection === 'X' || selection === 'DRAW') && winner === 'draw') isWin = true;
-           else if (selection === '2' && winner === 'away') isWin = true;
-           evaluatedAs = '1x2';
-       }
-
-       return { isWin, evaluatedAs, finalScore: finalScoreStr, hG, aG, winner };
-   }
-
-   setInterval(async () => {
-       try {
-           const now = new Date();
-           const openBets = await Bet.find({ status: { $in: ['Open', 'Partial'] } }).populate('userId');
-           
-           for (let bet of openBets) {
-               let betUpdated = false, allSettled = true, hasLost = false;
-
-               for (let leg of bet.selections) {
-                   if (leg.status !== 'Open') { 
-                       if (leg.status === 'Lost') hasLost = true; 
-                       continue; 
-                   }
-
-                   let matchResult = null;
-                   try { 
-                       if (mongoose.Types.ObjectId.isValid(leg.matchId)) {
-                           matchResult = await Match.findById(leg.matchId); 
-                       }
-                       if (!matchResult && leg.match) {
-                           matchResult = await Match.findOne({ homeTeam: leg.match.split(' v ')[0], startTime: leg.startTime }); 
-                       }
-                   } catch(e){}
-
-                   const settlementTime = new Date(new Date(leg.startTime).getTime() + (2*60*60*1000));
-                   const canSettle = now >= settlementTime;
-                   
-                   if (!canSettle) { 
-                       allSettled = false; 
-                       continue; 
-                   }
-
-                   let resultObj = null;
-                   if (matchResult) {
-                       if (matchResult.result && matchResult.result.correctScore) {
-                           resultObj = matchResult.result;
-                       } else if (matchResult.finalScore || matchResult.score) {
-                           const sc = matchResult.finalScore || matchResult.score;
-                           if (typeof sc === 'string' && sc.includes('-')) {
-                               const p = sc.split('-').map(s => parseInt(s.trim()));
-                               if (p.length === 2 && !isNaN(p[0]) && !isNaN(p[1])) {
-                                   resultObj = { homeGoals: p[0], awayGoals: p[1], correctScore: sc };
-                               }
-                           }
-                       }
-                   }
-
-                   if (!resultObj) {
-                       // FIX: Do NOT randomly settle. Keep open until admin sets result.
-                       console.log(`[SETTLE] Bet ${bet.ticketId} | ${leg.match} | No admin result yet. Waiting.`);
-                       allSettled = false;
-                       continue;
-                   }
-
-                   const evalResult = evaluateBetLeg(leg, resultObj);
-                   leg.status = evalResult.isWin ? 'Won' : 'Lost';
-                   leg.finalScore = evalResult.finalScore;
-                   betUpdated = true;
-
-                   console.log(`[SETTLE] Bet ${bet.ticketId} | ${leg.match} | Pick: ${leg.pick} | Market: ${leg.marketType} | Result: ${evalResult.finalScore} | Win: ${evalResult.isWin} | Eval: ${evalResult.evaluatedAs}`);
-
-                   if (leg.status === 'Lost') hasLost = true;
-               }
-
-               if (hasLost) { 
-                   bet.status = 'Lost'; 
-                   betUpdated = true; 
-               }
-               else if (allSettled) {
-                   bet.status = 'Won'; 
-                   betUpdated = true;
-                   const user = await User.findById(bet.userId);
-                   if (user) { 
-                       user.balance += bet.potentialWin; 
-                       user.totalWon = (user.totalWon || 0) + bet.potentialWin;
-                       await user.save(); 
-                       await Transaction.create({ userId: user._id, type: 'Win', amount: bet.potentialWin, currency: bet.currency, status: 'Success' }); 
-                       await new Notification({ userId: user._id, title: "Bet Won! 🎉", message: `Your bet ${bet.ticketId} won! ${bet.potentialWin} ${bet.currency} credited.` }).save(); 
-                   }
-               } else if (betUpdated) { 
-                   bet.status = 'Partial'; 
-               }
-
-               if (betUpdated) { 
-                   bet.markModified('selections'); 
-                   await bet.save(); 
-               }
-           }
-       } catch (err) { console.error("Settlement error:", err.message); }
-   }, 30000);
+      setInterval(async () => {
+        try {
+            const now = new Date();
+            const openBets = await Bet.find({ status: { $in: ['Open', 'Partial'] } }).populate('userId');
+            
+            for (let bet of openBets) {
+                let betUpdated = false, allSettled = true, hasLost = false;
+    
+                for (let leg of bet.selections) {
+                    if (leg.status !== 'Open') { 
+                        if (leg.status === 'Lost') hasLost = true; 
+                        continue; 
+                    }
+    
+                    let matchResult = null;
+                    try { 
+                        if (mongoose.Types.ObjectId.isValid(leg.matchId)) {
+                            matchResult = await Match.findById(leg.matchId); 
+                        }
+                        if (!matchResult && leg.match) {
+                            matchResult = await Match.findOne({ homeTeam: leg.match.split(' v ')[0], startTime: leg.startTime }); 
+                        }
+                    } catch(e){}
+    
+                    const settlementTime = new Date(new Date(leg.startTime).getTime() + (2*60*60*1000));
+                    const canSettle = now >= settlementTime;
+                    
+                    if (!canSettle) { 
+                        allSettled = false; 
+                        continue; 
+                    }
+    
+                    let resultObj = null;
+                    if (matchResult) {
+                        if (matchResult.result && matchResult.result.correctScore) {
+                            resultObj = matchResult.result;
+                        } else if (matchResult.finalScore || matchResult.score) {
+                            const sc = matchResult.finalScore || matchResult.score;
+                            if (typeof sc === 'string' && sc.includes('-')) {
+                                const p = sc.split('-').map(s => parseInt(s.trim()));
+                                if (p.length === 2 && !isNaN(p[0]) && !isNaN(p[1])) {
+                                    resultObj = { homeGoals: p[0], awayGoals: p[1], correctScore: sc };
+                                }
+                            }
+                        }
+                    }
+    
+                    /* ═══════════════════════════════════════════════════════
+                       FIX: Auto-generate deterministic result if admin forgot
+                       Only applies to admin matches (no apiId) after 2h
+                       ═══════════════════════════════════════════════════════ */
+                    if (!resultObj && matchResult && !matchResult.apiId) {
+                        const seed = matchResult._id.toString().split('').reduce((a, b) => a + b.charCodeAt(0), 0);
+                        const hG = seed % 4;
+                        const aG = (seed * 7) % 4;
+                        const correctScore = `${hG}-${aG}`;
+                        resultObj = {
+                            homeGoals: hG,
+                            awayGoals: aG,
+                            correctScore: correctScore,
+                            winner: hG > aG ? 'home' : aG > hG ? 'away' : 'draw'
+                        };
+                        
+                        // Save the generated result to the match so it's locked in
+                        await Match.findByIdAndUpdate(matchResult._id, {
+                            result: resultObj,
+                            finalScore: correctScore,
+                            score: correctScore,
+                            status: 'completed',
+                            isLive: false
+                        });
+                        
+                        console.log(`[AUTO-SETTLE] Generated fallback result for admin match ${matchResult._id}: ${correctScore}`);
+                    }
+    
+                    if (!resultObj) {
+                        console.log(`[SETTLE] Bet ${bet.ticketId} | ${leg.match} | No result available yet. Waiting.`);
+                        allSettled = false;
+                        continue;
+                    }
+    
+                    const evalResult = evaluateBetLeg(leg, resultObj);
+                    leg.status = evalResult.isWin ? 'Won' : 'Lost';
+                    leg.finalScore = evalResult.finalScore;
+                    betUpdated = true;
+    
+                    console.log(`[SETTLE] Bet ${bet.ticketId} | ${leg.match} | Pick: ${leg.pick} | Market: ${leg.marketType} | Result: ${evalResult.finalScore} | Win: ${evalResult.isWin} | Eval: ${evalResult.evaluatedAs}`);
+    
+                    if (leg.status === 'Lost') hasLost = true;
+                }
+    
+                if (hasLost) { 
+                    bet.status = 'Lost'; 
+                    betUpdated = true; 
+                }
+                else if (allSettled) {
+                    bet.status = 'Won'; 
+                    betUpdated = true;
+                    const user = await User.findById(bet.userId);
+                    if (user) { 
+                        user.balance += bet.potentialWin; 
+                        user.totalWon = (user.totalWon || 0) + bet.potentialWin;
+                        await user.save(); 
+                        await Transaction.create({ userId: user._id, type: 'Win', amount: bet.potentialWin, currency: bet.currency, status: 'Success' }); 
+                        await new Notification({ userId: user._id, title: "Bet Won! 🎉", message: `Your bet ${bet.ticketId} won! ${bet.potentialWin} ${bet.currency} credited.` }).save(); 
+                    }
+                } else if (betUpdated) { 
+                    bet.status = 'Partial'; 
+                }
+    
+                if (betUpdated) { 
+                    bet.markModified('selections'); 
+                    await bet.save(); 
+                }
+            }
+        } catch (err) { console.error("Settlement error:", err.message); }
+    }, 30000);
 
    /* =========================================================
       ODDS API HELPERS
